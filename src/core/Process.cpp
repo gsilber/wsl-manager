@@ -173,7 +173,8 @@ ProcessResult RunProcess(const std::wstring& exe, const std::vector<std::wstring
 
 void LaunchInNewConsole(const std::wstring& exe, const std::vector<std::wstring>& args) {
     std::wstring cmd = BuildCommandLine(exe, args);
-    STARTUPINFOW si{sizeof(si)};
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
     PROCESS_INFORMATION pi{};
     if (!CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, FALSE, CREATE_NEW_CONSOLE, nullptr, nullptr, &si,
                         &pi))

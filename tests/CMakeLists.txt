@@ -8,6 +8,10 @@ FetchContent_Declare(googletest
 set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
 set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
+# GoogleTest builds with warnings as errors; Clang 21+ added -Wcharacter-conversion,
+# which its char8_t printer trips.
+set(GTEST_CLANG_FIXES $<$<CXX_COMPILER_ID:Clang>:-Wno-character-conversion>)
+target_compile_options(gtest PRIVATE ${GTEST_CLANG_FIXES})
 
 # Stand-in for wsl.exe that simulates WSL against a scratch registry key.
 add_executable(fake_wsl fake_wsl/main.cpp)
@@ -29,6 +33,8 @@ target_link_libraries(wslmgr_tests PRIVATE wslcli GTest::gtest ole32 shell32)
 # (A source property, so it lands after the /W4 that wslcore propagates.)
 set_source_files_properties(WslTests.cpp CliTests.cpp PROPERTIES
     COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:Clang>:-Wno-missing-designated-field-initializers>")
+# The GoogleTest headers trip the same Clang warning as its sources.
+target_compile_options(wslmgr_tests PRIVATE ${GTEST_CLANG_FIXES})
 # The tests find fake_wsl.exe next to themselves.
 add_dependencies(wslmgr_tests fake_wsl)
 set_target_properties(fake_wsl wslmgr_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests)

@@ -46,6 +46,8 @@ The coverage run needs the Visual Studio component **C++ Clang Compiler for Wind
 
 For how the code is structured and why, see [docs/design.md](docs/design.md).
 
+> **After a Visual Studio update**, CMake can fail to configure because the build folders still refer to the old compiler version. Delete `build\` and run the script again.
+
 ## Command line
 
 ```text

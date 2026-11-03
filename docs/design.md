@@ -129,7 +129,16 @@ The test suite (`tests/`, GoogleTest) runs the real core and CLI code against a 
 - **`ConsoleScope`** covers the CLI's console-only paths: `WriteConsoleW`, redrawing progress and keyboard prompts. It points stdout and stderr at a hidden console screen buffer that the test reads back, and queues keystrokes into the console's input.
 - **Disk-lock tests** hold the disk file open exclusively, either releasing it from a second thread or never releasing it, to exercise `WaitForDiskRelease`.
 
-**Coverage.** `test.cmd --coverage` rebuilds the core, CLI and tests with `clang-cl` and Clang's source-based coverage. It then runs the tests and reports line, region and branch coverage for `src/core` and `src/cli` with `llvm-cov`. MSVC has no free native coverage tool: `dotnet-coverage` only instruments native binaries in Visual Studio Enterprise. The coverage target is 100% of the core and CLI.
+**Coverage.** `test.cmd --coverage` rebuilds the core, CLI and tests with `clang-cl` and Clang's source-based coverage. It then runs the tests and reports line, region and branch coverage for `src/core` and `src/cli` with `llvm-cov`. MSVC has no free native coverage tool: `dotnet-coverage` only instruments native binaries in Visual Studio Enterprise, and the old `CodeCoverage.exe` no longer collects.
+
+The coverage target is 100% of the core and CLI. At the time of writing (103 tests), 100% of functions are covered, 99.7% of lines and 99.2% of branches. `Wsl.cpp` and `Util.cpp` are fully covered. The only gaps are defensive handlers for failures that tests can't produce without fault injection in production code:
+
+| Where | Uncovered | Why it stays |
+|---|---|---|
+| `Process.cpp` | `CreatePipe`, `InitializeProcThreadAttributeList` and `UpdateProcThreadAttribute` failing, and `CreateFileW("NUL")` returning `INVALID_HANDLE_VALUE` | These Win32 calls fail only when the system is out of resources |
+| `Cli.cpp` | `catch (const std::exception&)` in `RunCli` | Nothing in the CLI throws anything except `WslError`. The handler stops an unexpected `bad_alloc` from crashing the program with an unhandled exception |
+
+Keep it this way. A new branch in the core or CLI should come with a test, or with an entry in this table explaining why it can't have one.
 
 The GUI (`src/gui`) is outside the automated tests and the coverage target. Most of its code is Win32 message handling and modal dialogs, including shell file pickers, which need UI automation to drive. Its logic is limited to argument assembly, and the core functions it calls are tested.
 
