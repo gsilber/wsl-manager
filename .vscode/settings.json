@@ -1,0 +1,7 @@
+{
+  "files.eol": "\n",
+  "files.associations": { "*.rc": "c" },
+  "C_Cpp.default.cppStandard": "c++20",
+  "C_Cpp.default.compilerPath": "cl.exe",
+  "C_Cpp.default.compileCommands": "${workspaceFolder}/build/Release/compile_commands.json"
+}
