@@ -1,5 +1,6 @@
 #include "Wsl.h"
 
+#include "Environment.h"
 #include "Process.h"
 
 #include <windows.h>
@@ -16,24 +17,27 @@ namespace fs = std::filesystem;
 namespace wslmgr {
 namespace {
 
-constexpr wchar_t kLxssKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Lxss";
-constexpr wchar_t kSettingsKey[] = L"Software\\WslManager";
 constexpr wchar_t kMetadataSuffix[] = L".wslmeta";
 constexpr wchar_t kDefaultVhdName[] = L"ext4.vhdx";
 constexpr DWORD kFlagWsl2 = 0x8;  // LXSS_DISTRO_FLAGS_VM_MODE
 
-std::wstring LxssSubKey(const std::wstring& id) { return std::wstring(kLxssKey) + L"\\" + id; }
+const wchar_t* LxssKey() { return CurrentEnvironment().lxssKey.c_str(); }
+const wchar_t* SettingsKey() { return CurrentEnvironment().settingsKey.c_str(); }
+std::wstring LxssSubKey(const std::wstring& id) { return CurrentEnvironment().lxssKey + L"\\" + id; }
 
 std::optional<std::wstring> ReadRegString(const wchar_t* key, const wchar_t* value) {
-    DWORD size = 0;
-    if (RegGetValueW(HKEY_CURRENT_USER, key, value, RRF_RT_REG_SZ, nullptr, nullptr, &size) != ERROR_SUCCESS)
-        return std::nullopt;
-    std::wstring text(size / sizeof(wchar_t) + 1, L'\0');
-    size = static_cast<DWORD>(text.size() * sizeof(wchar_t));
-    if (RegGetValueW(HKEY_CURRENT_USER, key, value, RRF_RT_REG_SZ, nullptr, text.data(), &size) != ERROR_SUCCESS)
-        return std::nullopt;
-    text.resize(wcsnlen(text.c_str(), text.size()));
-    return text;
+    std::wstring text(MAX_PATH, L'\0');
+    for (;;) {
+        DWORD size = static_cast<DWORD>(text.size() * sizeof(wchar_t));
+        LSTATUS status = RegGetValueW(HKEY_CURRENT_USER, key, value, RRF_RT_REG_SZ, nullptr, text.data(), &size);
+        if (status == ERROR_MORE_DATA) {
+            text.resize(size / sizeof(wchar_t) + 1);
+            continue;
+        }
+        if (status != ERROR_SUCCESS) return std::nullopt;
+        text.resize(wcsnlen(text.c_str(), text.size()));
+        return text;
+    }
 }
 
 std::optional<DWORD> ReadRegDword(const wchar_t* key, const wchar_t* value) {
@@ -44,22 +48,18 @@ std::optional<DWORD> ReadRegDword(const wchar_t* key, const wchar_t* value) {
     return data;
 }
 
+void WriteRegValue(const wchar_t* key, const wchar_t* value, DWORD type, const void* data, size_t size) {
+    LSTATUS status = RegSetKeyValueW(HKEY_CURRENT_USER, key, value, type, data, static_cast<DWORD>(size));
+    if (status != ERROR_SUCCESS) throw WslError(L"Could not write to the registry: " + LastErrorMessage(status));
+}
+
 void WriteRegString(const wchar_t* key, const wchar_t* value, std::wstring_view data) {
     std::wstring text(data);
-    LSTATUS status = RegSetKeyValueW(HKEY_CURRENT_USER, key, value, REG_SZ, text.c_str(),
-                                     static_cast<DWORD>((text.size() + 1) * sizeof(wchar_t)));
-    if (status != ERROR_SUCCESS) throw WslError(L"Could not write to the registry: " + LastErrorMessage(status));
+    WriteRegValue(key, value, REG_SZ, text.c_str(), (text.size() + 1) * sizeof(wchar_t));
 }
 
 void WriteRegDword(const wchar_t* key, const wchar_t* value, DWORD data) {
-    LSTATUS status = RegSetKeyValueW(HKEY_CURRENT_USER, key, value, REG_DWORD, &data, sizeof(data));
-    if (status != ERROR_SUCCESS) throw WslError(L"Could not write to the registry: " + LastErrorMessage(status));
-}
-
-std::wstring WslExePath() {
-    wchar_t system[MAX_PATH];
-    UINT len = GetSystemDirectoryW(system, MAX_PATH);
-    return std::wstring(system, len) + L"\\wsl.exe";
+    WriteRegValue(key, value, REG_DWORD, &data, sizeof(data));
 }
 
 void Say(const OutputFn& out, const std::wstring& message) {
@@ -97,8 +97,8 @@ void StopDistro(const Distro& distro, const OutputFn& out) {
 // the disk file wait for that instead of failing with a sharing violation.
 void WaitForDiskRelease(const std::wstring& vhdPath, const OutputFn& out) {
     if (vhdPath.empty()) return;
-    constexpr DWORD kTimeoutMs = 120000;
-    constexpr DWORD kPollMs = 2000;
+    const ULONGLONG timeoutMs = CurrentEnvironment().diskReleaseTimeoutMs;
+    const DWORD pollMs = CurrentEnvironment().diskReleasePollMs;
     bool announced = false;
     for (ULONGLONG start = GetTickCount64();;) {
         HANDLE file = CreateFileW(vhdPath.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
@@ -106,10 +106,9 @@ void WaitForDiskRelease(const std::wstring& vhdPath, const OutputFn& out) {
             CloseHandle(file);
             return;
         }
-        DWORD error = GetLastError();
-        if (error != ERROR_SHARING_VIOLATION && error != ERROR_LOCK_VIOLATION) return;  // let wsl.exe report it
+        if (GetLastError() != ERROR_SHARING_VIOLATION) return;  // e.g. missing file: let wsl.exe report it
         ULONGLONG elapsed = GetTickCount64() - start;
-        if (elapsed >= kTimeoutMs)
+        if (elapsed >= timeoutMs)
             throw WslError(L"The virtual disk " + vhdPath +
                            L" is still in use. Make sure the instance is stopped, or shut down WSL "
                            L"(this stops all instances) and try again.");
@@ -118,7 +117,7 @@ void WaitForDiskRelease(const std::wstring& vhdPath, const OutputFn& out) {
             announced = true;
         }
         if (out) out(L"Waiting for the virtual disk... " + std::to_wstring(elapsed / 1000) + L"s", true);
-        Sleep(kPollMs);
+        Sleep(pollMs);
     }
 }
 
@@ -136,7 +135,7 @@ void ValidateNameSyntax(std::wstring_view name) {
 
 bool RemoveFolderIfEmpty(const std::wstring& folder) {
     std::error_code ec;
-    if (folder.empty() || !fs::is_directory(folder, ec) || !fs::is_empty(folder, ec) || ec) return false;
+    if (folder.empty() || !fs::is_directory(folder, ec) || !fs::is_empty(folder, ec)) return false;
     return RemoveDirectoryW(folder.c_str()) != 0;
 }
 
@@ -219,6 +218,18 @@ std::vector<std::wstring> RunningDistroNames() {
 
 }  // namespace
 
+Environment& CurrentEnvironment() {
+    static Environment environment;
+    return environment;
+}
+
+std::wstring WslExePath() {
+    if (!CurrentEnvironment().wslExe.empty()) return CurrentEnvironment().wslExe;
+    wchar_t system[MAX_PATH];
+    UINT len = GetSystemDirectoryW(system, MAX_PATH);
+    return std::wstring(system, len) + L"\\wsl.exe";
+}
+
 const wchar_t* FormatArg(BackupFormat format) {
     switch (format) {
         case BackupFormat::Vhd: return L"vhd";
@@ -276,22 +287,21 @@ std::wstring StateName(const Distro& distro) {
 std::wstring NormalizeFolder(std::wstring_view path) {
     std::wstring folder = AbsolutePath(StripLongPathPrefix(Trim(path)));
     if (folder.empty()) throw WslError(L"No storage location was given.");
-    while (folder.size() > 3 && (folder.back() == L'\\' || folder.back() == L'/')) folder.pop_back();
+    // AbsolutePath has normalised separators to '\'; keep the one in a drive root like "C:\".
+    while (folder.size() > 3 && folder.back() == L'\\') folder.pop_back();
     return folder;
 }
 
 std::vector<Distro> ListDistros(bool queryRunning) {
     std::vector<Distro> result;
     HKEY lxss = nullptr;
-    if (RegOpenKeyExW(HKEY_CURRENT_USER, kLxssKey, 0, KEY_READ, &lxss) != ERROR_SUCCESS) return result;
-    std::wstring defaultId = ReadRegString(kLxssKey, L"DefaultDistribution").value_or(L"");
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, LxssKey(), 0, KEY_READ, &lxss) != ERROR_SUCCESS) return result;
+    std::wstring defaultId = ReadRegString(LxssKey(), L"DefaultDistribution").value_or(L"");
 
     for (DWORD index = 0;; ++index) {
-        wchar_t id[256];
+        wchar_t id[256];  // registry key names are at most 255 characters
         DWORD idLen = static_cast<DWORD>(std::size(id));
-        LSTATUS status = RegEnumKeyExW(lxss, index, id, &idLen, nullptr, nullptr, nullptr, nullptr);
-        if (status == ERROR_NO_MORE_ITEMS) break;
-        if (status != ERROR_SUCCESS) continue;
+        if (RegEnumKeyExW(lxss, index, id, &idLen, nullptr, nullptr, nullptr, nullptr) != ERROR_SUCCESS) break;
 
         std::wstring key = LxssSubKey(id);
         auto name = ReadRegString(key.c_str(), L"DistributionName");
@@ -369,14 +379,14 @@ void ValidateNewName(std::wstring_view name) {
 }
 
 std::wstring GetDefaultRoot() {
-    if (auto root = ReadRegString(kSettingsKey, L"DefaultRoot"); root && !root->empty()) return *root;
+    if (auto root = ReadRegString(SettingsKey(), L"DefaultRoot"); root && !root->empty()) return *root;
     wchar_t profile[MAX_PATH];
     DWORD len = GetEnvironmentVariableW(L"USERPROFILE", profile, MAX_PATH);
     return (len && len < MAX_PATH ? std::wstring(profile, len) : std::wstring(L"C:")) + L"\\WSL";
 }
 
 void SetDefaultRoot(std::wstring_view folder) {
-    WriteRegString(kSettingsKey, L"DefaultRoot", NormalizeFolder(folder));
+    WriteRegString(SettingsKey(), L"DefaultRoot", NormalizeFolder(folder));
 }
 
 std::wstring DefaultLocationFor(std::wstring_view name) {

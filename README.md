@@ -33,6 +33,19 @@ Both executables link the C runtime statically, so they run without installing t
 > build.cmd
 > ```
 
+## Testing
+
+```bat
+test.cmd              &rem build (MSVC, Debug) and run the tests with ctest
+test.cmd --coverage   &rem build with clang-cl and report coverage of src\core and src\cli
+```
+
+The tests run the real core and CLI code against `fake_wsl.exe`, a stand-in for `wsl.exe` that simulates WSL in a scratch registry key and temp folders. They never touch your real WSL instances or settings. The first build downloads GoogleTest.
+
+The coverage run needs the Visual Studio component **C++ Clang Compiler for Windows** (Visual Studio Installer → Modify → Individual components). It prints a summary and writes an HTML report to `build\coverage\report\html\index.html`.
+
+For how the code is structured and why, see [docs/design.md](docs/design.md).
+
 ## Command line
 
 ```text
@@ -64,7 +77,10 @@ If an instance is running and the command needs it stopped, `wslmgr` asks for co
 ## Layout
 
 ```text
-src/core/   WSL operations (registry + wsl.exe), process runner, utilities
-src/cli/    wslmgr.exe
-src/gui/    wslmgr-gui.exe (main window, dialogs, resources, manifest)
+src/core/         WSL operations (registry + wsl.exe), process runner, utilities
+src/cli/          wslmgr.exe (Cli.cpp holds the logic; main.cpp just calls it)
+src/gui/          wslmgr-gui.exe (main window, dialogs, resources, manifest)
+tests/            GoogleTest suite and fake_wsl.exe
+docs/             design document
+scripts/          shared build-script helpers
 ```

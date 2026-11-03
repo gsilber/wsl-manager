@@ -7,6 +7,9 @@
 
 namespace wslmgr {
 
+const std::wstring& WslError::message() const noexcept { return message_; }
+const char* WslError::what() const noexcept { return "WslError"; }
+
 std::wstring Utf8ToWide(std::string_view text) {
     if (text.empty()) return {};
     int len = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
@@ -80,5 +83,7 @@ std::wstring LastErrorMessage(unsigned long error) {
     LocalFree(buffer);
     return message;
 }
+
+void ThrowLastError(const std::wstring& what) { throw WslError(what + L": " + LastErrorMessage(GetLastError())); }
 
 }  // namespace wslmgr

@@ -13,8 +13,8 @@ namespace wslmgr {
 class WslError : public std::exception {
 public:
     explicit WslError(std::wstring message) : message_(std::move(message)) {}
-    const std::wstring& message() const noexcept { return message_; }
-    const char* what() const noexcept override { return "WslError"; }
+    const std::wstring& message() const noexcept;
+    const char* what() const noexcept override;
 
 private:
     std::wstring message_;
@@ -34,5 +34,6 @@ std::wstring FormatBytes(uint64_t bytes);
 std::wstring Timestamp();  // local time as YYYYMMDD-HHMMSS
 std::wstring StripLongPathPrefix(std::wstring_view path);
 std::wstring LastErrorMessage(unsigned long error);
+[[noreturn]] void ThrowLastError(const std::wstring& what);  // throws "<what>: <GetLastError() text>"
 
 }  // namespace wslmgr

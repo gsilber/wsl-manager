@@ -2,6 +2,8 @@
 
 #include <windows.h>
 
+#include <memory>
+
 namespace wslmgr {
 namespace {
 
@@ -35,6 +37,7 @@ public:
     void Feed(const char* data, size_t size) {
         for (size_t i = 0; i < size; ++i) {
             char c = data[i];
+            if (c == '\0') continue;  // tolerate UTF-16 output if WSL_UTF8 is ignored
             if (pendingCr_) {
                 pendingCr_ = false;
                 if (c == '\n') {
@@ -47,7 +50,7 @@ public:
                 pendingCr_ = true;
             } else if (c == '\n') {
                 Emit(false);
-            } else if (c != '\0') {  // tolerate UTF-16 output if WSL_UTF8 is ignored
+            } else {
                 line_.push_back(c);
             }
         }
@@ -116,8 +119,7 @@ ProcessResult RunProcess(const std::wstring& exe, const std::vector<std::wstring
 
     SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
     UniqueHandle readPipe, writePipe;
-    if (!CreatePipe(readPipe.put(), writePipe.put(), &sa, 0))
-        throw WslError(L"Could not create a pipe: " + LastErrorMessage(GetLastError()));
+    if (!CreatePipe(readPipe.put(), writePipe.put(), &sa, 0)) ThrowLastError(L"Could not create a pipe");
     SetHandleInformation(readPipe.get(), HANDLE_FLAG_INHERIT, 0);
 
     UniqueHandle nul(CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0,
@@ -130,14 +132,12 @@ ProcessResult RunProcess(const std::wstring& exe, const std::vector<std::wstring
     InitializeProcThreadAttributeList(nullptr, 1, 0, &attrSize);
     std::vector<char> attrBuffer(attrSize);
     auto attrs = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attrBuffer.data());
-    if (!InitializeProcThreadAttributeList(attrs, 1, 0, &attrSize))
-        throw WslError(L"Could not prepare process attributes: " + LastErrorMessage(GetLastError()));
+    if (!InitializeProcThreadAttributeList(attrs, 1, 0, &attrSize)) ThrowLastError(L"Could not prepare a process");
+    std::unique_ptr<_PROC_THREAD_ATTRIBUTE_LIST, decltype(&DeleteProcThreadAttributeList)> attrsGuard(
+        attrs, DeleteProcThreadAttributeList);
     if (!UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherit, sizeof(inherit), nullptr,
-                                   nullptr)) {
-        DWORD error = GetLastError();
-        DeleteProcThreadAttributeList(attrs);
-        throw WslError(L"Could not prepare process attributes: " + LastErrorMessage(error));
-    }
+                                   nullptr))
+        ThrowLastError(L"Could not prepare a process");
 
     STARTUPINFOEXW si{};
     si.StartupInfo.cb = sizeof(si);
@@ -149,12 +149,9 @@ ProcessResult RunProcess(const std::wstring& exe, const std::vector<std::wstring
 
     std::wstring cmd = BuildCommandLine(exe, args);
     PROCESS_INFORMATION pi{};
-    BOOL created = CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, TRUE,
-                                  CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT, nullptr, nullptr,
-                                  &si.StartupInfo, &pi);
-    DWORD createError = GetLastError();
-    DeleteProcThreadAttributeList(attrs);
-    if (!created) throw WslError(L"Could not start " + exe + L": " + LastErrorMessage(createError));
+    if (!CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
+                        nullptr, nullptr, &si.StartupInfo, &pi))
+        ThrowLastError(L"Could not start " + exe);
 
     UniqueHandle process(pi.hProcess);
     UniqueHandle thread(pi.hThread);
@@ -165,7 +162,8 @@ ProcessResult RunProcess(const std::wstring& exe, const std::vector<std::wstring
     LineSplitter splitter(onLine, result.output);
     char buffer[4096];
     DWORD read = 0;
-    while (ReadFile(readPipe.get(), buffer, sizeof(buffer), &read, nullptr) && read > 0) splitter.Feed(buffer, read);
+    // ReadFile fails with ERROR_BROKEN_PIPE once the child has exited and the pipe is drained.
+    while (ReadFile(readPipe.get(), buffer, sizeof(buffer), &read, nullptr)) splitter.Feed(buffer, read);
     splitter.Finish();
 
     WaitForSingleObject(process.get(), INFINITE);
@@ -179,7 +177,7 @@ void LaunchInNewConsole(const std::wstring& exe, const std::vector<std::wstring>
     PROCESS_INFORMATION pi{};
     if (!CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, FALSE, CREATE_NEW_CONSOLE, nullptr, nullptr, &si,
                         &pi))
-        throw WslError(L"Could not start " + exe + L": " + LastErrorMessage(GetLastError()));
+        ThrowLastError(L"Could not start " + exe);
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
 }
