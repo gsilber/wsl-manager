@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Per-user MSI for WSL Manager (WiX Toolset 5). Built by package.cmd, which passes:
+    Version  product version, from CMake's project(VERSION)
+    BinDir   folder holding the Release wslmgr.exe and wslmgr-gui.exe
+
+  Installs to %LOCALAPPDATA%\Programs\WSL Manager without elevation, adds a Start
+  menu shortcut for the GUI and puts the folder on the user's PATH for wslmgr.exe.
+  Uninstalling leaves the user's settings (HKCU\Software\WslManager\DefaultRoot)
+  and, of course, their WSL instances and backups alone.
+
+  The UI is a welcome page followed by the GPL licence (License.rtf, generated from
+  LICENSE by make-license-rtf.ps1), which must be accepted before installing.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Package Name="WSL Manager"
+           Manufacturer="WSL Manager"
+           Version="$(Version)"
+           UpgradeCode="{2508E9F8-6F55-4F08-B551-56CE19DC8876}"
+           Scope="perUser"
+           Compressed="yes">
+    <SummaryInformation Description="WSL Manager $(Version)" />
+
+    <!-- Installing any version replaces whatever version is already installed. -->
+    <MajorUpgrade DowngradeErrorMessage="A newer version of WSL Manager is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Welcome -> Licence (must accept) -> Ready -> Progress -> Finished. This is
+         WiX's InstallDir dialog set with the folder-choice page skipped: a per-user
+         tool lives in the standard per-user programs folder. -->
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+    <UI>
+      <Publish Dialog="LicenseAgreementDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Order="10"
+               Condition="LicenseAccepted = &quot;1&quot;" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="LicenseAgreementDlg" Order="10"
+               Condition="NOT Installed" />
+    </UI>
+    <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
+
+    <Property Id="ARPCOMMENTS" Value="Create, back up, copy, move and remove WSL instances." />
+    <Property Id="ARPURLINFOABOUT" Value="https://www.gnu.org/licenses/gpl-3.0.html" />
+    <Property Id="ARPNOREPAIR" Value="1" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="UserProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="WSL Manager" />
+      </Directory>
+    </StandardDirectory>
+
+    <!-- Files under the user profile need a per-user registry value as their key
+         path, and every folder created there must be removed on uninstall. WiX
+         can't derive GUIDs for such components, so they are fixed here: never
+         change them, or upgrades will orphan the old files. -->
+    <ComponentGroup Id="ProgramFiles" Directory="INSTALLFOLDER">
+      <Component Id="GuiComponent" Guid="{582C5000-C9FB-413F-91C9-4DD874253096}">
+        <File Id="GuiExe" Source="$(BinDir)\wslmgr-gui.exe" KeyPath="no" />
+        <RegistryValue Root="HKCU" Key="Software\WslManager\Installer" Name="Gui" Type="integer" Value="1"
+                       KeyPath="yes" />
+        <RemoveFolder Id="RemoveInstallFolder" On="uninstall" />
+        <RemoveFolder Id="RemoveUserProgramsFolder" Directory="UserProgramsFolder" On="uninstall" />
+      </Component>
+      <Component Id="CliComponent" Guid="{7063774A-E0DA-4C9E-B22A-14E915DBA8AD}">
+        <File Id="CliExe" Source="$(BinDir)\wslmgr.exe" KeyPath="no" />
+        <RegistryValue Root="HKCU" Key="Software\WslManager\Installer" Name="Cli" Type="integer" Value="1"
+                       KeyPath="yes" />
+        <!-- Appends the install folder to the user's PATH; removed again on uninstall. -->
+        <Environment Id="UserPath" Name="PATH" Value="[INSTALLFOLDER]" Part="last" Action="set" System="no"
+                     Permanent="no" />
+      </Component>
+    </ComponentGroup>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenuComponent">
+        <Shortcut Id="GuiShortcut" Name="WSL Manager" Description="Create, back up, copy, move and remove WSL instances"
+                  Target="[INSTALLFOLDER]wslmgr-gui.exe" WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU" Key="Software\WslManager\Installer" Name="Shortcut" Type="integer" Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="WSL Manager">
+      <ComponentGroupRef Id="ProgramFiles" />
+      <ComponentRef Id="StartMenuComponent" />
+    </Feature>
+  </Package>
+</Wix>

@@ -21,9 +21,14 @@ constexpr wchar_t kMetadataSuffix[] = L".wslmeta";
 constexpr wchar_t kDefaultVhdName[] = L"ext4.vhdx";
 constexpr DWORD kFlagWsl2 = 0x8;  // LXSS_DISTRO_FLAGS_VM_MODE
 
+// Docker Desktop owns these; changing them behind its back breaks Docker.
+constexpr const wchar_t* kProtectedByDefault[] = {L"docker-desktop", L"docker-desktop-data"};
+
 const wchar_t* LxssKey() { return CurrentEnvironment().lxssKey.c_str(); }
 const wchar_t* SettingsKey() { return CurrentEnvironment().settingsKey.c_str(); }
 std::wstring LxssSubKey(const std::wstring& id) { return CurrentEnvironment().lxssKey + L"\\" + id; }
+// One DWORD per instance name (1 = protected, 0 = explicitly unprotected).
+std::wstring ProtectionKey() { return CurrentEnvironment().settingsKey + L"\\Protected"; }
 
 std::optional<std::wstring> ReadRegString(const wchar_t* key, const wchar_t* value) {
     std::wstring text(MAX_PATH, L'\0');
@@ -85,6 +90,17 @@ Distro RequireDistro(std::wstring_view name) {
     auto distro = FindDistro(name, true);
     if (!distro) throw WslError(L"There is no WSL instance named '" + std::wstring(name) + L"'.");
     return *distro;
+}
+
+// Like RequireDistro, but refuses protected instances. `what` completes
+// "WSL Manager won't ...", e.g. L"remove it".
+Distro RequireUnprotected(std::wstring_view name, const wchar_t* what) {
+    Distro distro = RequireDistro(name);
+    if (distro.isProtected)
+        throw WslError(L"'" + distro.name + L"' is protected, so WSL Manager won't " + what +
+                       L". If you're sure, unprotect it first (Instance > Protected in the app, or "
+                       L"wslmgr unprotect " + distro.name + L").");
+    return distro;
 }
 
 void StopDistro(const Distro& distro, const OutputFn& out) {
@@ -316,6 +332,7 @@ std::vector<Distro> ListDistros(bool queryRunning) {
         d.defaultUid = ReadRegDword(key.c_str(), L"DefaultUid").value_or(0);
         d.registryState = ReadRegDword(key.c_str(), L"State").value_or(1);
         d.isDefault = EqualsIgnoreCase(d.id, defaultId);
+        d.isProtected = IsProtected(d.name);
         d.flavor = ReadRegString(key.c_str(), L"Flavor").value_or(L"");
         d.osVersion = ReadRegString(key.c_str(), L"OsVersion").value_or(L"");
         if (d.version == 2 && !d.basePath.empty()) {
@@ -376,6 +393,17 @@ std::vector<OnlineDistro> ListOnlineDistros() {
 void ValidateNewName(std::wstring_view name) {
     ValidateNameSyntax(name);
     if (FindDistro(name)) throw WslError(L"A WSL instance named '" + std::wstring(name) + L"' already exists.");
+}
+
+bool IsProtected(std::wstring_view name) {
+    if (auto setting = ReadRegDword(ProtectionKey().c_str(), std::wstring(name).c_str())) return *setting != 0;
+    return std::any_of(std::begin(kProtectedByDefault), std::end(kProtectedByDefault),
+                       [&](const wchar_t* protectedName) { return EqualsIgnoreCase(protectedName, name); });
+}
+
+void SetProtected(std::wstring_view name, bool isProtected) {
+    Distro distro = RequireDistro(name);
+    WriteRegDword(ProtectionKey().c_str(), distro.name.c_str(), isProtected ? 1 : 0);
 }
 
 std::wstring GetDefaultRoot() {
@@ -457,7 +485,7 @@ void RestoreBackup(std::wstring_view name, std::wstring_view location, std::wstr
 }
 
 void Clone(std::wstring_view source, std::wstring_view name, std::wstring_view location, const OutputFn& out) {
-    Distro src = RequireDistro(source);
+    Distro src = RequireUnprotected(source, L"copy it (that would stop it)");
     ValidateNewName(name);
     std::wstring folder = PrepareTargetFolder(location);
     StopDistro(src, out);
@@ -508,7 +536,7 @@ void Clone(std::wstring_view source, std::wstring_view name, std::wstring_view l
 }
 
 void Backup(std::wstring_view name, std::wstring_view file, BackupFormat format, const OutputFn& out) {
-    Distro distro = RequireDistro(name);
+    Distro distro = RequireUnprotected(name, L"back it up (that would stop it)");
     if (format == BackupFormat::Vhd && distro.version != 2)
         throw WslError(L"The vhdx backup format is only available for WSL 2 instances.");
 
@@ -532,17 +560,19 @@ void Backup(std::wstring_view name, std::wstring_view file, BackupFormat format,
 }
 
 void Remove(std::wstring_view name, bool deleteEmptyFolder, const OutputFn& out) {
-    Distro distro = RequireDistro(name);
+    Distro distro = RequireUnprotected(name, L"remove it");
     StopDistro(distro, out);
     Say(out, L"Unregistering '" + distro.name + L"' and deleting its virtual disk...");
     RunWsl({L"--unregister", distro.name}, out);
+    // Forget its protection setting so a future instance with this name starts fresh.
+    RegDeleteKeyValueW(HKEY_CURRENT_USER, ProtectionKey().c_str(), distro.name.c_str());
     if (deleteEmptyFolder && RemoveFolderIfEmpty(distro.basePath))
         Say(out, L"Removed the empty folder " + distro.basePath + L".");
     Say(out, L"Removed '" + distro.name + L"'.");
 }
 
 void Move(std::wstring_view name, std::wstring_view location, const OutputFn& out) {
-    Distro distro = RequireDistro(name);
+    Distro distro = RequireUnprotected(name, L"move it");
     std::wstring target = NormalizeFolder(location);
     if (!distro.basePath.empty() && EqualsIgnoreCase(target, NormalizeFolder(distro.basePath)))
         throw WslError(L"'" + distro.name + L"' is already stored in " + target + L".");
@@ -562,7 +592,7 @@ void Move(std::wstring_view name, std::wstring_view location, const OutputFn& ou
 }
 
 void Rename(std::wstring_view name, std::wstring_view newName, const OutputFn& out) {
-    Distro distro = RequireDistro(name);
+    Distro distro = RequireUnprotected(name, L"rename it");
     ValidateNameSyntax(newName);
     if (!EqualsIgnoreCase(name, newName) && FindDistro(newName))
         throw WslError(L"A WSL instance named '" + std::wstring(newName) + L"' already exists.");
@@ -573,20 +603,20 @@ void Rename(std::wstring_view name, std::wstring_view newName, const OutputFn& o
 }
 
 void SetDefault(std::wstring_view name, const OutputFn& out) {
-    Distro distro = RequireDistro(name);
+    Distro distro = RequireUnprotected(name, L"make it the default instance");
     RunWsl({L"--set-default", distro.name}, out);
     Say(out, L"'" + distro.name + L"' is now the default instance.");
 }
 
 void SetDefaultUser(std::wstring_view name, std::wstring_view user, const OutputFn& out) {
-    Distro distro = RequireDistro(name);
+    Distro distro = RequireUnprotected(name, L"change its default user");
     if (Trim(user).empty()) throw WslError(L"No user name was given.");
     RunWsl({L"--manage", distro.name, L"--set-default-user", Trim(user)}, out);
     Say(out, L"Default user of '" + distro.name + L"' set to " + Trim(user) + L".");
 }
 
 void Terminate(std::wstring_view name, const OutputFn& out) {
-    Distro distro = RequireDistro(name);
+    Distro distro = RequireUnprotected(name, L"stop it");
     RunWsl({L"--terminate", distro.name}, out);
     Say(out, L"Stopped '" + distro.name + L"'.");
 }

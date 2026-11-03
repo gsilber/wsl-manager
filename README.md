@@ -11,9 +11,22 @@ A native Windows tool for managing WSL instances. You can create instances, back
 - **Back up** an instance in any export format. A small `<file>.wslmeta` file is saved next to the backup. When you restore the backup, it brings back the default Linux user, which `wsl --import` would otherwise reset to root.
 - **Remove** an instance, with an optional backup first. You can also choose to delete its storage folder if nothing else is left in it.
 - **Move** an instance's storage to another folder (`wsl --manage --move`).
+- **Protect** an instance so WSL Manager won't remove, move, rename, stop, back up or copy it, make it the default, or change its default user. Backing up and copying count as changes because both stop the instance. `docker-desktop` (and the older `docker-desktop-data`) are protected by default, because Docker Desktop manages them. Toggle protection with Instance → Protected, or with `wslmgr protect` / `wslmgr unprotect`. You can still view a protected instance and open a shell on it.
 - **Other tasks:** rename an instance, set the default instance, set the default user, stop an instance, shut down WSL, and open a shell or the storage folder.
 
 New instances and backups go under a default storage folder. Out of the box this is `%USERPROFILE%\WSL`. Change it under File → Default Storage Folder or with `wslmgr config --default-folder <folder>`. The GUI also remembers the parent folder you used the last time you created an instance.
+
+## Installing
+
+Run `WslManager-<version>-x64.msi`. It installs for the current user only and doesn't need administrator rights. It:
+
+- installs both programs to `%LOCALAPPDATA%\Programs\WSL Manager`,
+- adds **WSL Manager** to the Start menu,
+- adds the install folder to your user `PATH`, so `wslmgr` works in any new terminal.
+
+Installing a newer version replaces the old one. To uninstall, use Settings → Apps → Installed apps. Uninstalling removes the programs, the shortcut and the `PATH` entry. It keeps your default storage folder setting, and it never touches your WSL instances or backups.
+
+For a silent install or uninstall: `msiexec /i WslManager-1.0.0-x64.msi /qn` and `msiexec /x WslManager-1.0.0-x64.msi /qn`.
 
 ## Building
 
@@ -25,6 +38,14 @@ build.cmd Debug
 ```
 
 Both executables link the C runtime statically, so they run without installing the VC++ redistributable.
+
+To build the installer:
+
+```bat
+package.cmd          &rem -> build\package\WslManager-<version>-x64.msi
+```
+
+This uses the [WiX Toolset](https://wixtoolset.org/) 5, which is pinned in `.config/dotnet-tools.json` and restored automatically. It needs the .NET SDK 8 or later. The package version comes from `project(VERSION ...)` in `CMakeLists.txt`, so bump that for each release. `package.cmd` does its own Release build in `build\package`, so it works even while you have the programs in `build\Release` open.
 
 > **Controlled Folder Access:** If Windows Security's ransomware protection guards this folder, it will block the compiler from writing to `build\`. Either allow `cmake.exe`, `ninja.exe`, `cl.exe`, `link.exe` and `rc.exe` through Controlled Folder Access, or build somewhere outside the protected folders:
 >
@@ -65,6 +86,8 @@ wslmgr set-user <name> <linux-user>
 wslmgr stop <name>
 wslmgr shell <name>
 wslmgr shutdown
+wslmgr protect <name>
+wslmgr unprotect <name>
 wslmgr config [--default-folder <folder>]
 ```
 
@@ -83,6 +106,17 @@ src/core/         WSL operations (registry + wsl.exe), process runner, utilities
 src/cli/          wslmgr.exe (Cli.cpp holds the logic; main.cpp just calls it)
 src/gui/          wslmgr-gui.exe (main window, dialogs, resources, manifest)
 tests/            GoogleTest suite and fake_wsl.exe
+installer/        WiX source for the MSI (Package.wxs) and its licence page
 docs/             design document
 scripts/          shared build-script helpers
 ```
+
+## License
+
+Copyright (C) 2026 Greg Silber
+
+WSL Manager is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+
+WSL Manager is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+The full text is in [LICENSE](LICENSE). The installer shows it on its licence page and asks you to accept it before installing.

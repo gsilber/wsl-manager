@@ -39,12 +39,18 @@ Instances
   stop <name>                           Terminate a running instance.
   shell <name>                          Open a shell on an instance in a new window.
   shutdown                              Stop all instances and the WSL virtual machine.
+  protect <name>                        Refuse to remove, move, rename, stop, back up or copy
+                                        an instance (docker-desktop is protected by default).
+  unprotect <name>                      Allow those changes again.
 
 Settings
   config [--default-folder <folder>]    Show or set the default storage folder.
 
 Options
   -y, --yes     Don't ask for confirmation (e.g. to stop a running instance or to remove).
+
+Copyright (C) 2026 Greg Silber. Licensed under the GNU GPL version 3 or later;
+this program comes with ABSOLUTELY NO WARRANTY. See the LICENSE file.
 )";
 
 HANDLE StdOut() { return GetStdHandle(STD_OUTPUT_HANDLE); }
@@ -213,11 +219,12 @@ int CmdList(int argc, wchar_t** argv) {
     }
     size_t nameWidth = 4;
     for (const auto& d : distros) nameWidth = std::max(nameWidth, d.name.size());
-    Print(L"  " + Pad(L"NAME", nameWidth + 2) + Pad(L"STATE", 10) + Pad(L"WSL", 5) + Pad(L"SIZE", 11) + L"LOCATION");
+    Print(L"  " + Pad(L"NAME", nameWidth + 2) + Pad(L"STATE", 10) + Pad(L"WSL", 5) + Pad(L"PROTECTED", 11) +
+          Pad(L"SIZE", 11) + L"LOCATION");
     for (const auto& d : distros) {
         Print((d.isDefault ? L"* " : L"  ") + Pad(d.name, nameWidth + 2) + Pad(StateName(d), 10) +
-              Pad(std::to_wstring(d.version), 5) + Pad(d.diskBytes ? FormatBytes(d.diskBytes) : L"-", 11) +
-              d.basePath);
+              Pad(std::to_wstring(d.version), 5) + Pad(d.isProtected ? L"yes" : L"", 11) +
+              Pad(d.diskBytes ? FormatBytes(d.diskBytes) : L"-", 11) + d.basePath);
     }
     Print(L"\n* = default instance.   Default storage folder: " + GetDefaultRoot());
     return 0;
@@ -231,6 +238,7 @@ int CmdInfo(int argc, wchar_t** argv) {
     Print(L"State:         " + StateName(d));
     Print(L"WSL version:   " + std::to_wstring(d.version));
     Print(L"Default:       " + std::wstring(d.isDefault ? L"yes" : L"no"));
+    Print(L"Protected:     " + std::wstring(d.isProtected ? L"yes" : L"no"));
     Print(L"OS:            " + Trim(d.flavor + L" " + d.osVersion));
     Print(L"Default UID:   " + std::to_wstring(d.defaultUid));
     Print(L"Location:      " + d.basePath);
@@ -350,6 +358,13 @@ int Run(int argc, wchar_t** argv) {
         return SimpleCommand(argc, argv, 1, L"stop <name>", [](const Args& a) { Terminate(a.positional[0], kOut); });
     if (command == L"shell")
         return SimpleCommand(argc, argv, 1, L"shell <name>", [](const Args& a) { OpenShell(a.positional[0]); });
+    if (command == L"protect" || command == L"unprotect") {
+        bool protect = command == L"protect";
+        return SimpleCommand(argc, argv, 1, protect ? L"protect <name>" : L"unprotect <name>", [&](const Args& a) {
+            SetProtected(a.positional[0], protect);
+            Print(L"'" + Require(a.positional[0], false).name + (protect ? L"' is now protected." : L"' is no longer protected."));
+        });
+    }
     if (command == L"shutdown")
         return SimpleCommand(argc, argv, 0, L"shutdown", [](const Args&) { Shutdown(kOut); });
     throw WslError(L"Unknown command '" + command + L"'. Run 'wslmgr help' for usage.");

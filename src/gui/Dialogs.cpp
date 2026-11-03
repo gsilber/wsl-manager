@@ -394,12 +394,15 @@ INT_PTR CALLBACK CreateDialogProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lPar
             SendDlgItemMessageW(dlg, IDC_VERSION, CB_SETCURSEL, 0, 0);
 
             int cloneIndex = -1;
+            bool anyCopyable = false;
             for (const auto& d : *state->existing) {
+                if (d.isProtected) continue;  // copying stops the source, which protection forbids
                 int index = ComboAdd(dlg, IDC_CLONESRC, d.name, 0);
                 if (EqualsIgnoreCase(d.name, state->cloneSource)) cloneIndex = index;
+                anyCopyable = true;
             }
             SendDlgItemMessageW(dlg, IDC_CLONESRC, CB_SETCURSEL, cloneIndex < 0 ? 0 : cloneIndex, 0);
-            if (state->existing->empty()) Enable(dlg, IDC_SRC_CLONE, false);
+            if (!anyCopyable) Enable(dlg, IDC_SRC_CLONE, false);
 
             if (g_onlineCache.empty())
                 StartOnlineLoad(dlg);

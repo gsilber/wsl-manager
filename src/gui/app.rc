@@ -15,6 +15,7 @@ BEGIN
         BEGIN
             VALUE "FileDescription", "WSL Manager"
             VALUE "FileVersion", "1.0.0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 Greg Silber. Licensed under GPL-3.0-or-later."
             VALUE "ProductName", "WSL Manager"
             VALUE "ProductVersion", "1.0.0"
         END
@@ -44,6 +45,7 @@ BEGIN
         MENUITEM "&Move Storage...", IDM_MOVE
         MENUITEM "Re&name...", IDM_RENAME
         MENUITEM "Set Default &User...", IDM_DEFAULTUSER
+        MENUITEM "&Protected", IDM_PROTECT
         MENUITEM SEPARATOR
         MENUITEM "Set as &Default", IDM_SETDEFAULT
         MENUITEM "S&top", IDM_STOP

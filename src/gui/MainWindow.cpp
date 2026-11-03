@@ -53,11 +53,16 @@ constexpr Command kCommands[] = {
     {IDM_OPENFOLDER, nullptr, true},
     {IDM_RENAME, nullptr, true},
     {IDM_DEFAULTUSER, nullptr, true},
+    {IDM_PROTECT, nullptr, true},
     {IDM_SHUTDOWN, nullptr, false},
     {IDM_DEFAULTROOT, nullptr, false},
 };
 
-enum Column { ColName, ColState, ColVersion, ColDefault, ColSize, ColLocation, ColOs };
+// Commands the core refuses for a protected instance; greyed out instead.
+constexpr UINT kChangesInstance[] = {IDM_CLONE,      IDM_BACKUP, IDM_MOVE,   IDM_REMOVE,
+                                     IDM_SETDEFAULT, IDM_STOP,   IDM_RENAME, IDM_DEFAULTUSER};
+
+enum Column { ColName, ColState, ColVersion, ColDefault, ColProtected, ColSize, ColLocation, ColOs };
 
 struct ColumnInfo {
     const wchar_t* title;
@@ -66,8 +71,8 @@ struct ColumnInfo {
 };
 constexpr ColumnInfo kColumns[] = {
     {L"Name", 200, LVCFMT_LEFT},     {L"State", 80, LVCFMT_LEFT},      {L"WSL", 45, LVCFMT_LEFT},
-    {L"Default", 60, LVCFMT_LEFT},   {L"Disk Size", 85, LVCFMT_RIGHT}, {L"Location", 300, LVCFMT_LEFT},
-    {L"OS", 110, LVCFMT_LEFT},
+    {L"Default", 60, LVCFMT_LEFT},   {L"Protected", 70, LVCFMT_LEFT},  {L"Disk Size", 85, LVCFMT_RIGHT},
+    {L"Location", 300, LVCFMT_LEFT}, {L"OS", 110, LVCFMT_LEFT},
 };
 
 struct ListResult {
@@ -163,6 +168,7 @@ void PopulateList(const std::wstring& selectName) {
         SetCell(row, ColState, StateName(d));
         SetCell(row, ColVersion, std::to_wstring(d.version));
         SetCell(row, ColDefault, d.isDefault ? L"Yes" : L"");
+        SetCell(row, ColProtected, d.isProtected ? L"Yes" : L"");
         SetCell(row, ColSize, d.diskBytes ? FormatBytes(d.diskBytes) : L"");
         SetCell(row, ColLocation, d.basePath);
         SetCell(row, ColOs, Trim(d.flavor + L" " + d.osVersion));
@@ -201,6 +207,10 @@ bool IsCommandEnabled(UINT id) {
     if (id == IDM_EXIT || id == IDM_ABOUT) return true;
     // While an operation runs, only harmless commands stay available.
     if (g.busy && id != IDM_REFRESH && id != IDM_SHELL && id != IDM_OPENFOLDER) return false;
+    const Distro* selected = Selected();
+    if (selected && selected->isProtected && std::find(std::begin(kChangesInstance), std::end(kChangesInstance), id) !=
+                                                 std::end(kChangesInstance))
+        return false;
     for (const auto& c : kCommands) {
         if (c.id == id) return !c.needsSelection || Selected() != nullptr;
     }
@@ -346,6 +356,22 @@ void OnCommand(UINT id) {
                          [name, user = *user](const OutputFn& out) { SetDefaultUser(name, user, out); });
             break;
         }
+        case IDM_PROTECT: {
+            bool protect = !d.isProtected;
+            if (!protect) {
+                std::wstring question = L"Allow WSL Manager to remove, move, rename, stop, back up and copy '" + name +
+                                        L"' again?";
+                if (EqualsIgnoreCase(name, L"docker-desktop") || EqualsIgnoreCase(name, L"docker-desktop-data"))
+                    question += L"\n\nDocker Desktop manages this instance. Changing it outside Docker Desktop "
+                                L"can break Docker.";
+                if (MessageBoxW(g.window, question.c_str(), kAppTitle, MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) !=
+                    IDYES)
+                    return;
+            }
+            RunOperation((protect ? L"Protecting '" : L"Unprotecting '") + name + L"'",
+                         [name, protect](const OutputFn&) { SetProtected(name, protect); });
+            break;
+        }
         case IDM_SETDEFAULT:
             RunOperation(L"Setting '" + name + L"' as default", [name](const OutputFn& out) { SetDefault(name, out); });
             break;
@@ -388,7 +414,11 @@ void OnCommand(UINT id) {
         case IDM_ABOUT:
             MessageBoxW(g.window,
                         (L"WSL Manager 1.0\n\nCreate, back up, copy, move and remove WSL instances.\n\n"
-                         L"Default storage folder:\n" + GetDefaultRoot())
+                         L"Default storage folder:\n" + GetDefaultRoot() +
+                         L"\n\nCopyright (C) 2026 Greg Silber\n"
+                         L"This program is free software, licensed under the GNU General Public License "
+                         L"version 3 or later. It comes with ABSOLUTELY NO WARRANTY; see the LICENSE file "
+                         L"or https://www.gnu.org/licenses/gpl-3.0.html for details.")
                             .c_str(),
                         kAppTitle, MB_OK | MB_ICONINFORMATION);
             break;
@@ -585,6 +615,8 @@ LRESULT CALLBACK WndProc(HWND window, UINT msg, WPARAM wParam, LPARAM lParam) {
                 if (id != static_cast<UINT>(-1) && id != 0)
                     EnableMenuItem(menu, id, MF_BYCOMMAND | (IsCommandEnabled(id) ? MF_ENABLED : MF_GRAYED));
             }
+            const Distro* selected = Selected();
+            CheckMenuItem(menu, IDM_PROTECT, MF_BYCOMMAND | (selected && selected->isProtected ? MF_CHECKED : MF_UNCHECKED));
             return 0;
         }
 

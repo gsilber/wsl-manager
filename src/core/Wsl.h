@@ -22,6 +22,7 @@ struct Distro {
     uint32_t defaultUid = 0;
     uint32_t registryState = 1;  // 1 = installed; other values mean install/uninstall in progress
     bool isDefault = false;
+    bool isProtected = false;  // see IsProtected()
     bool running = false;
     uint64_t diskBytes = 0;
     std::wstring flavor;
@@ -53,6 +54,13 @@ std::vector<OnlineDistro> ListOnlineDistros();
 
 // Throws if `name` is not a valid, unused instance name.
 void ValidateNewName(std::wstring_view name);
+
+// Protection. A protected instance can't be removed, moved, renamed, stopped, made
+// the default, given a new default user, or backed up or copied (both stop it);
+// those operations throw instead. Instances Docker Desktop manages are protected
+// unless the user has explicitly unprotected them.
+bool IsProtected(std::wstring_view name);
+void SetProtected(std::wstring_view name, bool isProtected);
 
 // Settings: the folder new instances and backups go to by default.
 std::wstring GetDefaultRoot();

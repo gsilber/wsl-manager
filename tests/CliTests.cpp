@@ -62,13 +62,18 @@ TEST_F(CliTest, ListWhenEmpty) {
 TEST_F(CliTest, ListShowsInstances) {
     std::wstring id = AddDistro({.name = L"Ubuntu", .diskContent = std::string(2048, 'x')});
     AddDistro({.name = L"Old", .version = 1, .running = true});
+    AddDistro({.name = L"docker-desktop"});
     MakeDefault(id);
+    auto spaces = [](size_t n) { return std::wstring(n, L' '); };
 
     auto result = RunCli({L"ls"});
     EXPECT_EQ(result.exitCode, 0);
-    EXPECT_TRUE(Contains(result.out, L"  NAME    STATE     WSL  SIZE       LOCATION\n"));
-    EXPECT_TRUE(Contains(result.out, L"  Old     Running   1    -          " + Path(L"instances\\Old").wstring()));
-    EXPECT_TRUE(Contains(result.out, L"* Ubuntu  Stopped   2    2.0 KB     "));
+    // Name column is 16 wide here ("docker-desktop" + 2).
+    EXPECT_TRUE(Contains(result.out, L"  NAME" + spaces(12) + L"STATE     WSL  PROTECTED  SIZE       LOCATION\n"));
+    EXPECT_TRUE(Contains(result.out, L"  Old" + spaces(13) + L"Running   1    " + spaces(11) + L"-" + spaces(10) +
+                                         Path(L"instances\\Old").wstring()));
+    EXPECT_TRUE(Contains(result.out, L"  docker-desktop  Stopped   2    yes" + spaces(8) + L"4 B" + spaces(8)));
+    EXPECT_TRUE(Contains(result.out, L"* Ubuntu" + spaces(10) + L"Stopped   2    " + spaces(11) + L"2.0 KB     "));
     EXPECT_TRUE(Contains(result.out, L"Default storage folder: " + Path(L"root").wstring()));
 }
 
@@ -87,6 +92,7 @@ TEST_F(CliTest, Info) {
     EXPECT_TRUE(Contains(result.out, L"State:         Stopped\n"));
     EXPECT_TRUE(Contains(result.out, L"WSL version:   2\n"));
     EXPECT_TRUE(Contains(result.out, L"Default:       yes\n"));
+    EXPECT_TRUE(Contains(result.out, L"Protected:     no\n"));
     EXPECT_TRUE(Contains(result.out, L"OS:            ubuntu 24.04\n"));
     EXPECT_TRUE(Contains(result.out, L"Default UID:   1000\n"));
     EXPECT_TRUE(Contains(result.out, L"Virtual disk:  " + Path(L"instances\\Dev\\ext4.vhdx").wstring() + L" (3 B)\n"));
@@ -269,6 +275,33 @@ TEST_F(CliTest, SimpleCommands) {
     EXPECT_TRUE(Contains(RunCli({L"stop"}).err, L"Usage: wslmgr stop <name>"));
     EXPECT_TRUE(Contains(RunCli({L"shell"}).err, L"Usage: wslmgr shell <name>"));
     EXPECT_TRUE(Contains(RunCli({L"shutdown", L"extra"}).err, L"Usage: wslmgr shutdown"));
+}
+
+TEST_F(CliTest, ProtectAndUnprotect) {
+    AddDistro({.name = L"Prod"});
+    AddDistro({.name = L"docker-desktop"});
+
+    auto protect = RunCli({L"protect", L"prod"});
+    EXPECT_EQ(protect.exitCode, 0);
+    EXPECT_EQ(protect.out, L"'Prod' is now protected.\n");
+    EXPECT_TRUE(Contains(RunCli({L"info", L"Prod"}).out, L"Protected:     yes\n"));
+
+    auto blocked = RunCli({L"remove", L"Prod", L"--yes"});
+    EXPECT_EQ(blocked.exitCode, 1);
+    EXPECT_TRUE(Contains(blocked.err, L"error: 'Prod' is protected, so WSL Manager won't remove it."));
+    EXPECT_TRUE(FindDistro(L"Prod"));
+
+    auto docker = RunCli({L"stop", L"docker-desktop"});  // protected without being asked
+    EXPECT_EQ(docker.exitCode, 1);
+    EXPECT_TRUE(Contains(docker.err, L"wslmgr unprotect docker-desktop"));
+
+    auto unprotect = RunCli({L"unprotect", L"Prod"});
+    EXPECT_EQ(unprotect.out, L"'Prod' is no longer protected.\n");
+    EXPECT_EQ(RunCli({L"remove", L"Prod", L"--yes"}).exitCode, 0);
+
+    EXPECT_TRUE(Contains(RunCli({L"protect"}).err, L"Usage: wslmgr protect <name>"));
+    EXPECT_TRUE(Contains(RunCli({L"unprotect"}).err, L"Usage: wslmgr unprotect <name>"));
+    EXPECT_TRUE(Contains(RunCli({L"protect", L"Nope"}).err, L"There is no WSL instance named 'Nope'."));
 }
 
 TEST_F(CliTest, ProgressIsDroppedWhenOutputIsNotAConsole) {

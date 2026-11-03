@@ -5,6 +5,9 @@ if(NOT WIN32 OR NOT MSVC)
     message(FATAL_ERROR "WSL Manager is a Windows application and must be built with MSVC.")
 endif()
 
+# package.cmd reads this to version the MSI.
+file(WRITE ${CMAKE_BINARY_DIR}/version.txt "${PROJECT_VERSION}")
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Static runtime so the executables run without the VC++ redistributable.

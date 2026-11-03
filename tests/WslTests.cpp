@@ -2,6 +2,7 @@
 
 #include <array>
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <thread>
 
@@ -316,6 +317,87 @@ TEST_F(NameTest, Validation) {
     ExpectError([] { ValidateNewName(L"café"); }, L"may only contain");  // non-ASCII
     ExpectError([] { ValidateNewName(L"at@"); }, L"may only contain");         // between digits and letters
     ExpectError([] { ValidateNewName(L"TAKEN"); }, L"already exists");
+}
+
+// ---------------------------------------------------------------------------
+// Protection
+
+class ProtectionTest : public test::WslTest {};
+
+TEST_F(ProtectionTest, DockerDesktopIsProtectedByDefault) {
+    EXPECT_TRUE(IsProtected(L"docker-desktop"));
+    EXPECT_TRUE(IsProtected(L"DOCKER-DESKTOP-DATA"));
+    EXPECT_FALSE(IsProtected(L"Ubuntu"));
+
+    AddDistro({.name = L"docker-desktop"});
+    AddDistro({.name = L"Ubuntu"});
+    auto distros = ListDistros(false);
+    ASSERT_EQ(distros[0].name, L"docker-desktop");  // sorted case-insensitively
+    EXPECT_TRUE(distros[0].isProtected);
+    EXPECT_FALSE(distros[1].isProtected);
+}
+
+TEST_F(ProtectionTest, CanBeSwitchedOnAndOff) {
+    AddDistro({.name = L"Prod"});
+    AddDistro({.name = L"docker-desktop"});
+
+    SetProtected(L"prod", true);
+    EXPECT_TRUE(FindDistro(L"Prod")->isProtected);
+    SetProtected(L"PROD", false);
+    EXPECT_FALSE(FindDistro(L"Prod")->isProtected);
+
+    SetProtected(L"docker-desktop", false);  // an explicit choice overrides the default
+    EXPECT_FALSE(IsProtected(L"docker-desktop"));
+
+    ExpectError([] { SetProtected(L"Nope", true); }, L"There is no WSL instance named 'Nope'");
+}
+
+TEST_F(ProtectionTest, BlocksEveryChangeAndRunsNoWslCommand) {
+    AddDistro({.name = L"docker-desktop", .running = true});
+    const std::wstring target = Path(L"target").wstring();
+    const std::pair<std::function<void()>, std::wstring_view> blocked[] = {
+        {[&] { Backup(L"docker-desktop", Path(L"b.tar").wstring(), BackupFormat::Tar, nullptr); },
+         L"won't back it up (that would stop it)"},
+        {[&] { Clone(L"docker-desktop", L"Copy", target, nullptr); }, L"won't copy it (that would stop it)"},
+        {[&] { Remove(L"docker-desktop", true, nullptr); }, L"won't remove it"},
+        {[&] { Move(L"docker-desktop", target, nullptr); }, L"won't move it"},
+        {[&] { Rename(L"docker-desktop", L"other", nullptr); }, L"won't rename it"},
+        {[&] { SetDefault(L"docker-desktop", nullptr); }, L"won't make it the default instance"},
+        {[&] { SetDefaultUser(L"docker-desktop", L"alice", nullptr); }, L"won't change its default user"},
+        {[&] { Terminate(L"docker-desktop", nullptr); }, L"won't stop it"},
+    };
+    for (const auto& [action, message] : blocked) ExpectError(action, message);
+
+    for (const auto& call : WslCalls())  // only "which instances are running?" queries
+        EXPECT_EQ(call, L"--list\t--running\t--quiet");
+    auto distro = FindDistro(L"docker-desktop", true);
+    EXPECT_TRUE(distro->running);
+    EXPECT_FALSE(distro->isDefault);
+    EXPECT_FALSE(fs::exists(Path(L"target")));
+    EXPECT_FALSE(fs::exists(Path(L"b.tar")));
+}
+
+TEST_F(ProtectionTest, TheMessageSaysHowToUnprotect) {
+    AddDistro({.name = L"Prod"});
+    SetProtected(L"Prod", true);
+    ExpectError([] { Remove(L"Prod", false, nullptr); },
+                L"'Prod' is protected, so WSL Manager won't remove it. If you're sure, unprotect it first "
+                L"(Instance > Protected in the app, or wslmgr unprotect Prod).");
+}
+
+TEST_F(ProtectionTest, ReadOnlyActionsStillWork) {
+    AddDistro({.name = L"docker-desktop", .running = true});
+    EXPECT_NO_THROW(OpenShell(L"docker-desktop"));
+    EXPECT_NO_THROW(Shutdown(nullptr));  // a global action, not a change to one instance
+}
+
+TEST_F(ProtectionTest, RemovingAnInstanceForgetsItsSetting) {
+    AddDistro({.name = L"docker-desktop"});
+    SetProtected(L"docker-desktop", false);
+    Remove(L"docker-desktop", false, nullptr);
+
+    AddDistro({.name = L"docker-desktop"});  // e.g. Docker Desktop reinstalled
+    EXPECT_TRUE(FindDistro(L"docker-desktop")->isProtected);
 }
 
 // ---------------------------------------------------------------------------

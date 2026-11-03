@@ -90,6 +90,20 @@ On WSL 2.6, `wsl --terminate` returns before the VM detaches the instance's disk
 
 The folder is created if needed. If the operation then fails, the folder is removed again, but only if it's empty. Folders are never deleted recursively. Some instances share a parent folder (for example `D:\WSL` holding one instance directly and others in subfolders), and an empty-only delete can't remove anyone else's data.
 
+### Protected instances
+Some instances belong to other software. The main case is `docker-desktop`: Docker Desktop creates it, and stopping, moving or removing it behind Docker's back breaks Docker. Any instance can be marked **protected**, and while it is, the core refuses these operations:
+- remove, move or rename it
+- stop it
+- make it the default instance
+- change its default user
+- back it up or copy it, because both stop it
+
+Each of these goes through `RequireUnprotected`, which throws before any `wsl.exe` command runs. Its message names the blocked action and explains how to unprotect the instance. Opening a shell, listing and `Shutdown` (a global action) are still allowed.
+
+- **Storage:** protection is a DWORD per instance *name* under `HKCU\Software\WslManager\Protected`: 1 means protected, 0 means explicitly unprotected. With no value, the defaults apply. `docker-desktop` and `docker-desktop-data` are protected by default, so they're safe even before the user has opened WSL Manager. Keying by name rather than GUID means the setting survives Docker Desktop recreating its instance.
+- **Removal:** removing an instance deletes its value, so a later instance with the same name starts from the defaults. Renaming a protected instance is itself blocked, so a name-keyed setting can never end up pointing at the wrong instance.
+- **The two front ends:** both enforce protection through the core, and both explain it up front. The GUI greys out blocked commands for a protected selection, and leaves protected instances out of the "copy an existing instance" list. Unprotecting asks for confirmation, with an extra warning for Docker's instances. The CLI shows protection in `list` and `info`.
+
 ### Stopping instances
 Operations that need an instance stopped (backup, copy, move, rename and remove) stop it themselves. Each front end asks first if the instance is running: the GUI shows a dialog, and the CLI shows a `[y/N]` prompt, which `--yes` skips. A prompt the CLI can't answer counts as no.
 
@@ -100,6 +114,22 @@ Operations that need an instance stopped (backup, copy, move, rename and remove)
 - The C runtime is linked statically (`/MT`), so the executables run without the VC++ redistributable.
 - Core headers are included as `core/...`, not by adding `src/core` to the include path. Windows paths are case-insensitive, so `src/core/Process.h` would otherwise shadow the CRT's `<process.h>`.
 - The GUI manifest declares Common Controls v6, PerMonitorV2 DPI awareness and `asInvoker`. Nothing needs elevation.
+
+## Installer
+
+`installer/Package.wxs` defines a **per-user** MSI, built with WiX Toolset 5 by `package.cmd`. Per-user suits the app: it only manages the current user's WSL instances, so it never needs elevation, and neither does its installer.
+
+- **Install location:** `%LOCALAPPDATA%\Programs\WSL Manager`. This is the conventional per-user programs folder, and it doesn't vary with `ALLUSERS`. That's why WiX reports ICE91 warnings, which are expected and harmless here.
+- **Start menu shortcut:** one shortcut, for the GUI, in the user's Start menu.
+- **PATH:** an `Environment` entry appends the install folder to the user's `PATH` (`HKCU\Environment`). Windows Installer removes it again on uninstall.
+- **Key paths:** files under the user profile can't be component key paths. Each component therefore uses a value under `HKCU\Software\WslManager\Installer`, and the folders it creates have matching `RemoveFolder` entries. Uninstalling removes only the `Installer` subkey. The user's `DefaultRoot` setting in the parent key is deliberately left in place.
+- **Fixed IDs:** the `UpgradeCode` and the two file components' GUIDs are fixed. WiX can't derive GUIDs for components whose key path is a registry value. **Never change them.** With `MajorUpgrade`, installing any version replaces the installed one, and installing an older version over a newer one is refused.
+- **Setup pages:** Welcome → Licence → Ready to install → progress → Finished. These come from WiX's `WixUI_InstallDir` dialog set, with two `Publish` overrides that skip the folder-choice page, because a per-user tool belongs in the standard folder. The Licence page shows `installer/License.rtf`, and Next stays disabled until the box is ticked. A silent install (`msiexec /qn`) skips the pages, as usual for MSIs.
+- **Licence text:** `License.rtf` is generated from `LICENSE` by `installer/make-license-rtf.ps1` and committed. The script rejoins `LICENSE`'s hard-wrapped lines into paragraphs so the text reflows in the narrow licence box. If `LICENSE` ever changes, rerun the script.
+- **Version:** CMake writes `project(VERSION)` to `version.txt` in the build folder, and `package.cmd` passes it to WiX. The MSI version can't drift from the build.
+- **WiX version:** the project pins WiX **5.0.2** and its UI extension (`WixToolset.UI.wixext`, the same version) as a repo-local dotnet tool. `package.cmd` caches the extension in `.wix/`, which is git-ignored. WiX 6 and later require accepting the Open Source Maintenance Fee terms. Moving to them is a licensing decision, not just a version bump.
+
+The installer was checked by hand: silent install, then upgrading 1.0.0 to 1.0.1, then uninstall. It installed with no elevation, left one registered product and one PATH entry after the upgrade, and on uninstall restored the original `PATH` exactly and kept the user's setting.
 
 ## GUI threading model
 
@@ -131,7 +161,7 @@ The test suite (`tests/`, GoogleTest) runs the real core and CLI code against a 
 
 **Coverage.** `test.cmd --coverage` rebuilds the core, CLI and tests with `clang-cl` and Clang's source-based coverage. It then runs the tests and reports line, region and branch coverage for `src/core` and `src/cli` with `llvm-cov`. MSVC has no free native coverage tool: `dotnet-coverage` only instruments native binaries in Visual Studio Enterprise, and the old `CodeCoverage.exe` no longer collects.
 
-The coverage target is 100% of the core and CLI. At the time of writing (103 tests), 100% of functions are covered, 99.7% of lines and 99.2% of branches. `Wsl.cpp` and `Util.cpp` are fully covered. The only gaps are defensive handlers for failures that tests can't produce without fault injection in production code:
+The coverage target is 100% of the core and CLI. At the time of writing (110 tests), 100% of functions are covered, 99.7% of lines and 99.2% of branches. `Wsl.cpp` and `Util.cpp` are fully covered. The only gaps are defensive handlers for failures that tests can't produce without fault injection in production code:
 
 | Where | Uncovered | Why it stays |
 |---|---|---|
