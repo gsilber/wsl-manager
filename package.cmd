@@ -1,5 +1,7 @@
 @echo off
-rem Builds the per-user Windows installer: build\package\WslManager-<version>-x64.msi
+rem Builds the per-user Windows installer, build\package\WslManager-<version>-x64.msi,
+rem and the Microsoft Store package, build\package\InstanceManagerForWSL-<version>-x64.msix.
+rem   package.cmd --test   also builds a signed test MSIX (see scripts\make-msix.ps1).
 rem Uses its own Release build in build\package, so it can run while the programs
 rem in build\Release are open. WiX comes from the repo's dotnet tool manifest.
 setlocal
@@ -20,6 +22,11 @@ dotnet tool run wix extension add WixToolset.UI.wixext/5.0.2 >nul || (popd & exi
 dotnet tool run wix build installer\Package.wxs -arch x64 -ext WixToolset.UI.wixext ^
     -bindpath installer -d "Version=%VERSION%" -d "BinDir=%BUILD_DIR%" -o "%MSI%" || (popd & exit /b 1)
 popd
+
+set "MSIX_TEST="
+if /i "%~1"=="--test" set "MSIX_TEST=-Test"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\make-msix.ps1" -BinDir "%BUILD_DIR%" ^
+    -Version %VERSION% -OutDir "%BUILD_DIR%" %MSIX_TEST% || exit /b 1
 
 echo.
 echo Built: %MSI%

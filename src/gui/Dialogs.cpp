@@ -17,7 +17,7 @@ namespace fs = std::filesystem;
 
 namespace {
 
-constexpr wchar_t kAppTitle[] = L"WSL Manager";
+constexpr wchar_t kAppTitle[] = L"Instance Manager for WSL";
 constexpr UINT WM_APP_ONLINE = WM_APP + 10;
 
 // ---------------------------------------------------------------------------

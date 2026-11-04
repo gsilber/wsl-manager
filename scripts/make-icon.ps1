@@ -1,12 +1,13 @@
-# Draws the WSL Manager application icon and writes src\gui\app.ico.
+# Draws the Instance Manager for WSL application icon. Writes src\gui\app.ico and
+# the MSIX (Microsoft Store) logo images in packaging\msix\Assets.
 #
 #   powershell -ExecutionPolicy Bypass -File scripts\make-icon.ps1 [-Preview <folder>]
 #
 # The icon is a Fluent-blue rounded tile with a white shell prompt (">_"). From
-# 32 px up, two tiles stacked behind it stand for the instances WSL Manager looks
-# after. Each size is drawn separately, so the small ones stay sharp, and stored
-# as a PNG frame (supported by Windows Vista and later). -Preview also saves each
-# frame as a PNG in that folder.
+# 32 px up, two tiles stacked behind it stand for the instances the app looks
+# after. Each size is drawn separately, so the small ones stay sharp. The .ico
+# stores them as PNG frames (supported by Windows Vista and later). -Preview also
+# saves each .ico frame as a PNG in that folder.
 
 param([string]$Preview)
 
@@ -15,6 +16,7 @@ Add-Type -AssemblyName System.Drawing
 
 $sizes = 16, 20, 24, 32, 40, 48, 64, 256
 $out = Join-Path $PSScriptRoot '..\src\gui\app.ico'
+$assets = Join-Path $PSScriptRoot '..\packaging\msix\Assets'
 
 function New-RoundRect([single]$x, [single]$y, [single]$w, [single]$h, [single]$r) {
     $path = New-Object System.Drawing.Drawing2D.GraphicsPath
@@ -127,3 +129,43 @@ foreach ($f in $frames) { $w.Write($f.Data) }
 $w.Flush()
 [System.IO.File]::WriteAllBytes([System.IO.Path]::GetFullPath($out), $file.ToArray())
 "Wrote $([System.IO.Path]::GetFullPath($out)) ($($sizes -join ', ') px)"
+
+# ---------------------------------------------------------------------------
+# MSIX logo images. makepri picks the right file for each display scale or icon
+# size from the qualifier in its name (scale-200, targetsize-32, ...).
+
+# Saves a width x height PNG with the icon, iconSize px, centred on a transparent background.
+function Save-Asset([string]$name, [int]$width, [int]$height, [int]$iconSize) {
+    $canvas = New-Object System.Drawing.Bitmap $width, $height, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $g = [System.Drawing.Graphics]::FromImage($canvas)
+    $g.Clear([System.Drawing.Color]::Transparent)
+    $icon = Draw-Icon $iconSize
+    $g.DrawImageUnscaled($icon, [int](($width - $iconSize) / 2), [int](($height - $iconSize) / 2))
+    $icon.Dispose(); $g.Dispose()
+    $canvas.Save((Join-Path $assets $name), [System.Drawing.Imaging.ImageFormat]::Png)
+    $canvas.Dispose()
+}
+
+$assets = [System.IO.Path]::GetFullPath($assets)
+if (Test-Path $assets) { Get-ChildItem $assets -Filter *.png | Remove-Item }
+New-Item -ItemType Directory -Force $assets | Out-Null
+$scales = 100, 125, 150, 200, 400
+foreach ($scale in $scales) {
+    $k = $scale / 100
+    $s44 = [int][Math]::Round(44 * $k)
+    Save-Asset "Square44x44Logo.scale-$scale.png" $s44 $s44 $s44
+    $s150 = [int][Math]::Round(150 * $k)
+    Save-Asset "Square150x150Logo.scale-$scale.png" $s150 $s150 ([int]($s150 * 0.6))
+    $ww = [int][Math]::Round(310 * $k); $wh = [int][Math]::Round(150 * $k)
+    Save-Asset "Wide310x150Logo.scale-$scale.png" $ww $wh ([int]($wh * 0.6))
+    $s50 = [int][Math]::Round(50 * $k)
+    Save-Asset "StoreLogo.scale-$scale.png" $s50 $s50 $s50
+    $sw = [int][Math]::Round(620 * $k); $sh = [int][Math]::Round(300 * $k)
+    Save-Asset "SplashScreen.scale-$scale.png" $sw $sh ([int]($sh * 0.5))
+}
+# Start menu, taskbar and Explorer icons; "unplated" ones are drawn without a tile behind them.
+foreach ($t in 16, 20, 24, 30, 32, 36, 40, 48, 60, 64, 72, 80, 96, 256) {
+    Save-Asset "Square44x44Logo.targetsize-$t.png" $t $t $t
+    Save-Asset "Square44x44Logo.altform-unplated_targetsize-$t.png" $t $t $t
+}
+"Wrote $((Get-ChildItem $assets -Filter *.png).Count) MSIX images to $assets"

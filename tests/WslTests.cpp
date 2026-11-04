@@ -381,7 +381,7 @@ TEST_F(ProtectionTest, TheMessageSaysHowToUnprotect) {
     AddDistro({.name = L"Prod"});
     SetProtected(L"Prod", true);
     ExpectError([] { Remove(L"Prod", false, nullptr); },
-                L"'Prod' is protected, so WSL Manager won't remove it. If you're sure, unprotect it first "
+                L"'Prod' is protected, so Instance Manager for WSL won't remove it. If you're sure, unprotect it first "
                 L"(Protect on the app's Home tab, or wslmgr unprotect Prod).");
 }
 

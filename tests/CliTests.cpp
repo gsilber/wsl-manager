@@ -288,7 +288,7 @@ TEST_F(CliTest, ProtectAndUnprotect) {
 
     auto blocked = RunCli({L"remove", L"Prod", L"--yes"});
     EXPECT_EQ(blocked.exitCode, 1);
-    EXPECT_TRUE(Contains(blocked.err, L"error: 'Prod' is protected, so WSL Manager won't remove it."));
+    EXPECT_TRUE(Contains(blocked.err, L"error: 'Prod' is protected, so Instance Manager for WSL won't remove it."));
     EXPECT_TRUE(FindDistro(L"Prod"));
 
     auto docker = RunCli({L"stop", L"docker-desktop"});  // protected without being asked

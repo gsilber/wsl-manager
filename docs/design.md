@@ -1,10 +1,10 @@
-# WSL Manager: design
+# Instance Manager for WSL: design
 
-This document covers how WSL Manager is put together and why. It's for anyone changing the code. For build and usage instructions, see the [README](../README.md).
+This document covers how Instance Manager for WSL is put together and why. It's for anyone changing the code. For build and usage instructions, see the [README](../README.md).
 
 ## Goals
 
-WSL Manager manages WSL instances on one Windows machine, for the current user:
+Instance Manager for WSL manages WSL instances on one Windows machine, for the current user:
 
 - create an instance from a clean install, from a backup, or as a copy of another instance, in a storage folder you choose;
 - back up and remove instances;
@@ -46,7 +46,7 @@ Both front ends are thin. Anything that both need, such as default backup paths,
 
 ## How WSL is driven
 
-WSL has no public API covering these operations, and `wslapi.dll` only exposes registration and launching. WSL Manager therefore uses two channels:
+WSL has no public API covering these operations, and `wslapi.dll` only exposes registration and launching. Instance Manager for WSL therefore uses two channels:
 
 1. **`wsl.exe` for every state-changing operation**, such as install, import, export, unregister, move and terminate. WSL keeps responsibility for its own consistency: the VM, disk attachment and the service's caches.
 2. **The registry for reading**, under `HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss\{GUID}`. `wsl -l -v` doesn't report storage paths, disk files or default users, and its output is localised. The registry is fast, structured and the same in every language.
@@ -67,7 +67,7 @@ WSL has no public API covering these operations, and `wslapi.dll` only exposes r
 | **Rename** | Writes `DistributionName` directly, because `wsl.exe` has no rename command |
 | **Restore details after an import** | Writes `DefaultUid`, `Flavor` and `OsVersion` directly |
 
-The registry fields WSL Manager reads are `DistributionName`, `BasePath` (which may carry a `\\?\` prefix), `Flags` (bit `0x8` means WSL 2), `DefaultUid`, `State`, `VhdFileName`, `Flavor` and `OsVersion`, plus `DefaultDistribution` on the `Lxss` key itself. Direct writes happen only while the instance is stopped.
+The registry fields Instance Manager for WSL reads are `DistributionName`, `BasePath` (which may carry a `\\?\` prefix), `Flags` (bit `0x8` means WSL 2), `DefaultUid`, `State`, `VhdFileName`, `Flavor` and `OsVersion`, plus `DefaultDistribution` on the `Lxss` key itself. Direct writes happen only while the instance is stopped.
 
 `wsl.exe` writes UTF-16 by default. `RunProcess` sets `WSL_UTF8=1` so it writes UTF-8 instead. The line splitter also drops NUL bytes, in case some build ignores that variable.
 
@@ -100,7 +100,7 @@ Some instances belong to other software. The main case is `docker-desktop`: Dock
 
 Each of these goes through `RequireUnprotected`, which throws before any `wsl.exe` command runs. Its message names the blocked action and explains how to unprotect the instance. Opening a shell, listing and `Shutdown` (a global action) are still allowed.
 
-- **Storage:** protection is a DWORD per instance *name* under `HKCU\Software\WslManager\Protected`: 1 means protected, 0 means explicitly unprotected. With no value, the defaults apply. `docker-desktop` and `docker-desktop-data` are protected by default, so they're safe even before the user has opened WSL Manager. Keying by name rather than GUID means the setting survives Docker Desktop recreating its instance.
+- **Storage:** protection is a DWORD per instance *name* under `HKCU\Software\WslManager\Protected`: 1 means protected, 0 means explicitly unprotected. With no value, the defaults apply. `docker-desktop` and `docker-desktop-data` are protected by default, so they're safe even before the user has opened Instance Manager for WSL. Keying by name rather than GUID means the setting survives Docker Desktop recreating its instance.
 - **Removal:** removing an instance deletes its value, so a later instance with the same name starts from the defaults. Renaming a protected instance is itself blocked, so a name-keyed setting can never end up pointing at the wrong instance.
 - **The two front ends:** both enforce protection through the core, and both explain it up front. The GUI greys out blocked commands for a protected selection, and leaves protected instances out of the "copy an existing instance" list. Unprotecting asks for confirmation, with an extra warning for Docker's instances. The CLI shows protection in `list` and `info`.
 
@@ -119,17 +119,28 @@ Operations that need an instance stopped (backup, copy, move, rename and remove)
 
 `installer/Package.wxs` defines a **per-user** MSI, built with WiX Toolset 5 by `package.cmd`. Per-user suits the app: it only manages the current user's WSL instances, so it never needs elevation, and neither does its installer.
 
-- **Install location:** `%LOCALAPPDATA%\Programs\WSL Manager`. This is the conventional per-user programs folder, and it doesn't vary with `ALLUSERS`. That's why WiX reports ICE91 warnings, which are expected and harmless here.
-- **Start menu shortcut:** one shortcut, for the GUI, in the user's Start menu.
+- **Install location:** `%LOCALAPPDATA%\Programs\WSL Manager`, which keeps the app's original name: renaming the folder would orphan files on upgrade, because the file components' GUIDs are fixed (see below). This is the conventional per-user programs folder, and it doesn't vary with `ALLUSERS`. That's why WiX reports ICE91 warnings, which are expected and harmless here.
+- **Shortcuts:** the Shortcuts page sets `STARTMENUSHORTCUT` (on by default) and `DESKTOPSHORTCUT` (off), and conditioned components add a GUI shortcut to each place. `NoStartMenuComponent` is installed when the Start menu shortcut isn't, so its registry value records "turned off". On upgrade, `RegistrySearch`es read those values before the UI runs, and the previous choices carry over.
 - **PATH:** an `Environment` entry appends the install folder to the user's `PATH` (`HKCU\Environment`). Windows Installer removes it again on uninstall.
 - **Key paths:** files under the user profile can't be component key paths. Each component therefore uses a value under `HKCU\Software\WslManager\Installer`, and the folders it creates have matching `RemoveFolder` entries. Uninstalling removes only the `Installer` subkey. The user's `DefaultRoot` setting in the parent key is deliberately left in place.
 - **Fixed IDs:** the `UpgradeCode` and the two file components' GUIDs are fixed. WiX can't derive GUIDs for components whose key path is a registry value. **Never change them.** With `MajorUpgrade`, installing any version replaces the installed one, and installing an older version over a newer one is refused.
-- **Setup pages:** Welcome → Licence → Ready to install → progress → Finished. These come from WiX's `WixUI_InstallDir` dialog set, with two `Publish` overrides that skip the folder-choice page, because a per-user tool belongs in the standard folder. The Licence page shows `installer/License.rtf`, and Next stays disabled until the box is ticked. A silent install (`msiexec /qn`) skips the pages, as usual for MSIs.
+- **Setup pages:** Welcome → Licence → Shortcuts → Ready to install → progress → Finished. These come from WiX's `WixUI_InstallDir` dialog set. Two `Publish` overrides replace its folder-choice page with the custom `ShortcutsDlg`, because a per-user tool belongs in the standard folder. The Licence page shows `installer/License.rtf`, and Next stays disabled until the box is ticked. A silent install (`msiexec /qn`) skips the pages, as usual for MSIs.
 - **Licence text:** `License.rtf` is generated from `LICENSE` by `installer/make-license-rtf.ps1` and committed. The script rejoins `LICENSE`'s hard-wrapped lines into paragraphs so the text reflows in the narrow licence box. If `LICENSE` ever changes, rerun the script.
 - **Version:** CMake writes `project(VERSION)` to `version.txt` in the build folder, and `package.cmd` passes it to WiX. The MSI version can't drift from the build.
+- **Icon:** `ARPPRODUCTICON` shows `src/gui/app.ico` in Settings → Apps.
 - **WiX version:** the project pins WiX **5.0.2** and its UI extension (`WixToolset.UI.wixext`, the same version) as a repo-local dotnet tool. `package.cmd` caches the extension in `.wix/`, which is git-ignored. WiX 6 and later require accepting the Open Source Maintenance Fee terms. Moving to them is a licensing decision, not just a version bump.
 
 The installer was checked by hand: silent install, then upgrading 1.0.0 to 1.0.1, then uninstall. It installed with no elevation, left one registered product and one PATH entry after the upgrade, and on uninstall restored the original `PATH` exactly and kept the user's setting.
+
+## Microsoft Store package (MSIX)
+
+`scripts/make-msix.ps1`, run by `package.cmd`, builds the MSIX for the Store from `packaging/msix/AppxManifest.xml` and the logo images in `packaging/msix/Assets`.
+
+- **Identity:** the manifest's `Identity Name` and `PublisherDisplayName`, and the publisher in the script, are the values Partner Center assigned (Product management → Product identity). They must match exactly, or the upload is refused. The version is `project(VERSION)` plus a fourth part, `0`, which the Store requires.
+- **One app, two programs:** the Store allows only one `Application` per package, and WACK fails a package with more. So `App` is the GUI, with the Start menu entry, and it also declares an app execution alias, `wslmgr.exe`, whose `Executable` is the package's `wslmgr.exe`. That puts `wslmgr` on every terminal's path, which matters because MSIX can't edit `PATH`. Windows Terminal ships `wt.exe` the same way.
+- **No write virtualization:** by default, a packaged desktop app's writes to `HKCU` and to `AppData` go to a private, per-package copy. That would break the app. Its edits to `HKCU\...\Lxss` (rename, default instance, default user) would never reach the WSL service, which runs outside the package. New instance folders created under `AppData` would also be invisible to `wsl.exe`. `desktop6:RegistryWriteVirtualization` and `desktop6:FileSystemWriteVirtualization` are therefore `disabled`. That needs the restricted capability `unvirtualizedResources`, which Partner Center asks you to justify, as it does `runFullTrust`. As a result, the app's own settings live in the real `HKCU\Software\WslManager`, as with the MSI.
+- **Images:** `makepri` builds `resources.pri`, which maps each logo to its `scale-*` and `targetsize-*` variants. The images are generated by `scripts/make-icon.ps1` and committed.
+- **Signing:** the Store package is unsigned, because the Store signs it. `-Test` (`package.cmd --test`) also signs a copy with a self-signed certificate that has the Store publisher's subject, so it can be installed locally once that certificate is trusted. Windows refuses unsigned packages that contain desktop executables, even with `-AllowUnsigned`.
 
 ## GUI look and feel
 

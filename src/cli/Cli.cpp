@@ -17,7 +17,7 @@ using namespace wslmgr;
 
 namespace {
 
-constexpr wchar_t kUsage[] = LR"(WSL Manager - manage Windows Subsystem for Linux instances
+constexpr wchar_t kUsage[] = LR"(Instance Manager for WSL - manage Windows Subsystem for Linux instances
 
 Usage: wslmgr <command> [arguments] [options]
 

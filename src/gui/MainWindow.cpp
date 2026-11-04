@@ -29,7 +29,7 @@ namespace fs = std::filesystem;
 
 namespace {
 
-constexpr wchar_t kAppTitle[] = L"WSL Manager";
+constexpr wchar_t kAppTitle[] = L"Instance Manager for WSL";
 constexpr wchar_t kWindowClass[] = L"WslManagerMainWindow";
 
 constexpr UINT WM_APP_OUTPUT = WM_APP + 1;  // wParam: progress flag, lParam: std::wstring*
@@ -124,7 +124,7 @@ const std::vector<RibbonGroup>& Ribbon() {
           {IDM_DEFAULTUSER, glyph::Contact, L"Default User", false, Tint::Neutral,
            L"Choose the Linux user the selected instance logs in as."},
           {IDM_PROTECT, glyph::Shield, L"Protect", true, Tint::Accent,
-           L"Protect\nPrevent WSL Manager from changing, stopping or removing the selected instance."}}},
+           L"Protect\nPrevent Instance Manager for WSL from changing, stopping or removing the selected instance."}}},
         {Tab::Home, L"WSL",
          {{IDM_REFRESH, glyph::Refresh, L"Refresh", false, Tint::Neutral, L"Refresh the instance list (F5)."},
           {IDM_SHUTDOWN, glyph::Power, L"Shut Down WSL", false, Tint::Neutral,
@@ -135,7 +135,7 @@ const std::vector<RibbonGroup>& Ribbon() {
          {{IDM_VIEW_DETAILS, glyph::DockRight, L"Details Pane", true, Tint::Accent,
            L"Show or hide the details of the selected instance."},
           {IDM_VIEW_LOG, glyph::History, L"Activity Log", true, Tint::Accent,
-           L"Show or hide the log of WSL Manager's operations."}}},
+           L"Show or hide the log of this app's operations."}}},
         {Tab::View, L"Theme",
          {{IDM_THEME_SYSTEM, glyph::System, L"Use Windows Setting", false, Tint::Neutral,
            L"Follow the light or dark app mode chosen in Windows Settings."},
@@ -602,7 +602,7 @@ void OnCommand(UINT id) {
         case IDM_PROTECT: {
             bool protect = !d.isProtected;
             if (!protect) {
-                std::wstring question = L"Allow WSL Manager to remove, move, rename, stop, back up and copy '" + name +
+                std::wstring question = L"Allow Instance Manager for WSL to remove, move, rename, stop, back up and copy '" + name +
                                         L"' again?";
                 if (EqualsIgnoreCase(name, L"docker-desktop") || EqualsIgnoreCase(name, L"docker-desktop-data"))
                     question += L"\n\nDocker Desktop manages this instance. Changing it outside Docker Desktop "
@@ -684,7 +684,7 @@ void OnCommand(UINT id) {
             break;
         case IDM_ABOUT:
             ui::ShowMessage(g.window,
-                        (L"WSL Manager 1.0\n\nCreate, back up, copy, move and remove WSL instances.\n\n"
+                        (L"Instance Manager for WSL 1.0\n\nCreate, back up, copy, move and remove WSL instances.\n\n"
                          L"Default storage folder:\n" + GetDefaultRoot() +
                          L"\n\nCopyright (C) 2026 Greg Silber\n"
                          L"This program is free software, licensed under the GNU General Public License "
@@ -914,7 +914,7 @@ int PaintDetails(HDC dc, const RECT& area) {
     y += Scale(32);
 
     if (d->isProtected) {
-        const wchar_t* message = L"Protected. WSL Manager won't change, stop or remove this instance.";
+        const wchar_t* message = L"Protected. This app won't change, stop or remove this instance.";
         int textLeft = area.left + Scale(36);
         RECT measure = {textLeft, 0, area.right - Scale(12), 0};
         DrawTextW(dc, message, -1, &measure, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
@@ -1357,7 +1357,7 @@ LRESULT CALLBACK WndProc(HWND window, UINT msg, WPARAM wParam, LPARAM lParam) {
             Layout();
             UpdateCommandState();
             SetStatus(L"Loading instances...");
-            AppendLog(L"WSL Manager started. Default storage folder: " + GetDefaultRoot());
+            AppendLog(L"Instance Manager for WSL started. Default storage folder: " + GetDefaultRoot());
             StartRefresh();
             return 0;
         }

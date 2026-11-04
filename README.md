@@ -1,4 +1,4 @@
-# WSL Manager
+# Instance Manager for WSL
 
 A native Windows tool for managing WSL instances. You can create instances, back them up, copy them, move them and remove them. It includes a Win32 GUI (`wslmgr-gui.exe`) and a command-line tool (`wslmgr.exe`), and both use the same core library.
 
@@ -11,7 +11,7 @@ A native Windows tool for managing WSL instances. You can create instances, back
 - **Back up** an instance in any export format. A small `<file>.wslmeta` file is saved next to the backup. When you restore the backup, it brings back the default Linux user, which `wsl --import` would otherwise reset to root.
 - **Remove** an instance, with an optional backup first. You can also choose to delete its storage folder if nothing else is left in it.
 - **Move** an instance's storage to another folder (`wsl --manage --move`).
-- **Protect** an instance so WSL Manager won't remove, move, rename, stop, back up or copy it, make it the default, or change its default user. Backing up and copying count as changes because both stop the instance. `docker-desktop` (and the older `docker-desktop-data`) are protected by default, because Docker Desktop manages them. Toggle protection with Home → Protect (or right-click → Protected), or with `wslmgr protect` / `wslmgr unprotect`. You can still view a protected instance and open a shell on it.
+- **Protect** an instance so Instance Manager for WSL won't remove, move, rename, stop, back up or copy it, make it the default, or change its default user. Backing up and copying count as changes because both stop the instance. `docker-desktop` (and the older `docker-desktop-data`) are protected by default, because Docker Desktop manages them. Toggle protection with Home → Protect (or right-click → Protected), or with `wslmgr protect` / `wslmgr unprotect`. You can still view a protected instance and open a shell on it.
 - **Other tasks:** rename an instance, set the default instance, set the default user, stop an instance, shut down WSL, and open a shell or the storage folder.
 
 The GUI looks like current Microsoft 365 apps:
@@ -29,8 +29,8 @@ New instances and backups go under a default storage folder. Out of the box this
 
 Run `WslManager-<version>-x64.msi`. It installs for the current user only and doesn't need administrator rights. It:
 
-- installs both programs to `%LOCALAPPDATA%\Programs\WSL Manager`,
-- adds a **WSL Manager** shortcut to the Start menu, the desktop, both or neither. You choose on the Shortcuts page; by default only the Start menu gets one, and an upgrade keeps your earlier choice,
+- installs both programs to `%LOCALAPPDATA%\Programs\WSL Manager` (the folder keeps the app's original name, so upgrades from earlier versions work),
+- adds an **Instance Manager for WSL** shortcut to the Start menu, the desktop, both or neither. You choose on the Shortcuts page; by default only the Start menu gets one, and an upgrade keeps your earlier choice,
 - adds the install folder to your user `PATH`, so `wslmgr` works in any new terminal.
 
 Installing a newer version replaces the old one. To uninstall, use Settings → Apps → Installed apps. Uninstalling removes the programs, the shortcuts and the `PATH` entry. It keeps your default storage folder setting, and it never touches your WSL instances or backups.
@@ -48,15 +48,31 @@ build.cmd Debug
 
 Both executables link the C runtime statically, so they run without installing the VC++ redistributable.
 
-The application icon, `src/gui/app.ico`, is drawn by `scripts/make-icon.ps1`. To change the icon, edit the script and run `powershell -ExecutionPolicy Bypass -File scripts/make-icon.ps1`, then commit the new `.ico`. The build doesn't run the script.
+The application icon, `src/gui/app.ico`, and the Store logo images in `packaging/msix/Assets` are drawn by `scripts/make-icon.ps1`. To change the icon, edit the script and run `powershell -ExecutionPolicy Bypass -File scripts/make-icon.ps1`, then commit the new files. The build doesn't run the script.
 
-To build the installer:
+To build the installer and the Microsoft Store package:
 
 ```bat
-package.cmd          &rem -> build\package\WslManager-<version>-x64.msi
+package.cmd          &rem -> build\package\WslManager-<version>-x64.msi and InstanceManagerForWSL-<version>-x64.msix
+package.cmd --test   &rem    also InstanceManagerForWSL-<version>-x64-test.msix, signed for testing on this PC
 ```
 
-This uses the [WiX Toolset](https://wixtoolset.org/) 5, which is pinned in `.config/dotnet-tools.json` and restored automatically. It needs the .NET SDK 8 or later. The package version comes from `project(VERSION ...)` in `CMakeLists.txt`, so bump that for each release. `package.cmd` does its own Release build in `build\package`, so it works even while you have the programs in `build\Release` open.
+This uses the [WiX Toolset](https://wixtoolset.org/) 5, which is pinned in `.config/dotnet-tools.json` and restored automatically. It needs the .NET SDK 8 or later, and the Windows SDK for the MSIX tools. The package version comes from `project(VERSION ...)` in `CMakeLists.txt`, so bump that for each release. `package.cmd` does its own Release build in `build\package`, so it works even while you have the programs in `build\Release` open.
+
+### Microsoft Store package
+
+`scripts/make-msix.ps1` builds the MSIX from `packaging/msix/AppxManifest.xml`. The identity in that manifest, and the publisher in the script, must match Partner Center (Product management → Product identity). The `.msix` is unsigned; upload it as is, and the Store signs it.
+
+The package turns off MSIX's registry and file-system write virtualization (the `unvirtualizedResources` capability). Without that, the app's changes to WSL's registration and new instance folders would go to a private copy that WSL can't see. Partner Center asks you to justify this restricted capability, and `runFullTrust`, when you submit. The `wslmgr` command comes from an app execution alias, because MSIX can't change `PATH`.
+
+To try the package on your own PC before uploading it, run `package.cmd --test`. That signs a copy with a self-signed test certificate, which it creates in your personal certificate store the first time. Trust the certificate once, from an elevated PowerShell, then install:
+
+```powershell
+Import-Certificate -FilePath build\package\InstanceManagerForWSL-test.cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople
+Add-AppxPackage -Path build\package\InstanceManagerForWSL-1.0.0-x64-test.msix
+```
+
+Remove it again with `Get-AppxPackage GregSilber.InstanceManagerforWSL | Remove-AppxPackage`. The store version and the MSI can't be installed at the same time without two `wslmgr` commands competing, so uninstall the MSI first.
 
 > **Controlled Folder Access:** If Windows Security's ransomware protection guards this folder, it will block the compiler from writing to `build\`. Either allow `cmake.exe`, `ninja.exe`, `cl.exe`, `link.exe` and `rc.exe` through Controlled Folder Access, or build somewhere outside the protected folders:
 >
@@ -126,8 +142,8 @@ scripts/          shared build-script helpers, and make-icon.ps1 (draws src/gui/
 
 Copyright (C) 2026 Greg Silber
 
-WSL Manager is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+Instance Manager for WSL is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
 
-WSL Manager is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+Instance Manager for WSL is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 The full text is in [LICENSE](LICENSE). The installer shows it on its licence page and asks you to accept it before installing.

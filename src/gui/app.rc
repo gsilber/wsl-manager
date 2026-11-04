@@ -15,10 +15,10 @@ BEGIN
     BEGIN
         BLOCK "040904b0"
         BEGIN
-            VALUE "FileDescription", "WSL Manager"
+            VALUE "FileDescription", "Instance Manager for WSL"
             VALUE "FileVersion", "1.0.0"
             VALUE "LegalCopyright", "Copyright (C) 2026 Greg Silber. Licensed under GPL-3.0-or-later."
-            VALUE "ProductName", "WSL Manager"
+            VALUE "ProductName", "Instance Manager for WSL"
             VALUE "ProductVersion", "1.0.0"
         END
     END
@@ -40,7 +40,7 @@ BEGIN
         MENUITEM "&Refresh\tF5", IDM_REFRESH
         MENUITEM "Shut &Down WSL", IDM_SHUTDOWN
         MENUITEM SEPARATOR
-        MENUITEM "&About WSL Manager", IDM_ABOUT
+        MENUITEM "&About Instance Manager for WSL", IDM_ABOUT
         MENUITEM SEPARATOR
         MENUITEM "E&xit", IDM_EXIT
     END

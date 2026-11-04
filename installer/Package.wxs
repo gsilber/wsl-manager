@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Per-user MSI for WSL Manager (WiX Toolset 5). Built by package.cmd, which passes:
+  Per-user MSI for Instance Manager for WSL (WiX Toolset 5). Built by package.cmd, which passes:
     Version  product version, from CMake's project(VERSION)
     BinDir   folder holding the Release wslmgr.exe and wslmgr-gui.exe
 
@@ -15,16 +15,16 @@
   page with the shortcut choices.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
-  <Package Name="WSL Manager"
-           Manufacturer="WSL Manager"
+  <Package Name="Instance Manager for WSL"
+           Manufacturer="Greg Silber"
            Version="$(Version)"
            UpgradeCode="{2508E9F8-6F55-4F08-B551-56CE19DC8876}"
            Scope="perUser"
            Compressed="yes">
-    <SummaryInformation Description="WSL Manager $(Version)" />
+    <SummaryInformation Description="Instance Manager for WSL $(Version)" />
 
     <!-- Installing any version replaces whatever version is already installed. -->
-    <MajorUpgrade DowngradeErrorMessage="A newer version of WSL Manager is already installed." />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Instance Manager for WSL is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
     <!-- Welcome -> Licence (must accept) -> Shortcuts -> Ready -> Progress -> Finished.
@@ -44,7 +44,7 @@
         <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes" NoPrefix="yes"
                  Text="{\WixUI_Font_Title}Shortcuts" />
         <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15" Transparent="yes" NoPrefix="yes"
-                 Text="Choose where to add shortcuts to WSL Manager." />
+                 Text="Choose where to add shortcuts to Instance Manager for WSL." />
         <Control Id="StartMenu" Type="CheckBox" X="20" Y="60" Width="330" Height="18" CheckBoxValue="1"
                  Property="STARTMENUSHORTCUT" Text="Add a shortcut to the &amp;Start menu" />
         <Control Id="Desktop" Type="CheckBox" X="20" Y="82" Width="330" Height="18" CheckBoxValue="1"
@@ -122,7 +122,7 @@
          upgrade can tell "turned off" apart from "first install". -->
     <StandardDirectory Id="ProgramMenuFolder">
       <Component Id="StartMenuComponent" Condition="STARTMENUSHORTCUT">
-        <Shortcut Id="GuiShortcut" Name="WSL Manager" Description="Create, back up, copy, move and remove WSL instances"
+        <Shortcut Id="GuiShortcut" Name="Instance Manager for WSL" Description="Create, back up, copy, move and remove WSL instances"
                   Target="[INSTALLFOLDER]wslmgr-gui.exe" WorkingDirectory="INSTALLFOLDER" />
         <RegistryValue Root="HKCU" Key="Software\WslManager\Installer" Name="Shortcut" Type="integer" Value="1"
                        KeyPath="yes" />
@@ -135,7 +135,7 @@
 
     <StandardDirectory Id="DesktopFolder">
       <Component Id="DesktopComponent" Condition="DESKTOPSHORTCUT">
-        <Shortcut Id="DesktopShortcut" Name="WSL Manager"
+        <Shortcut Id="DesktopShortcut" Name="Instance Manager for WSL"
                   Description="Create, back up, copy, move and remove WSL instances"
                   Target="[INSTALLFOLDER]wslmgr-gui.exe" WorkingDirectory="INSTALLFOLDER" />
         <RegistryValue Root="HKCU" Key="Software\WslManager\Installer" Name="DesktopShortcut" Type="integer"
@@ -143,7 +143,7 @@
       </Component>
     </StandardDirectory>
 
-    <Feature Id="Main" Title="WSL Manager">
+    <Feature Id="Main" Title="Instance Manager for WSL">
       <ComponentGroupRef Id="ProgramFiles" />
       <ComponentRef Id="StartMenuComponent" />
       <ComponentRef Id="NoStartMenuComponent" />
