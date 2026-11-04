@@ -4,13 +4,15 @@
     Version  product version, from CMake's project(VERSION)
     BinDir   folder holding the Release wslmgr.exe and wslmgr-gui.exe
 
-  Installs to %LOCALAPPDATA%\Programs\WSL Manager without elevation, adds a Start
-  menu shortcut for the GUI and puts the folder on the user's PATH for wslmgr.exe.
+  Installs to %LOCALAPPDATA%\Programs\WSL Manager without elevation, adds Start menu
+  and/or desktop shortcuts for the GUI (the user chooses) and puts the folder on the
+  user's PATH for wslmgr.exe.
   Uninstalling leaves the user's settings (HKCU\Software\WslManager\DefaultRoot)
   and, of course, their WSL instances and backups alone.
 
   The UI is a welcome page followed by the GPL licence (License.rtf, generated from
-  LICENSE by make-license-rtf.ps1), which must be accepted before installing.
+  LICENSE by make-license-rtf.ps1), which must be accepted before installing, and a
+  page with the shortcut choices.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
   <Package Name="WSL Manager"
@@ -25,21 +27,68 @@
     <MajorUpgrade DowngradeErrorMessage="A newer version of WSL Manager is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
-    <!-- Welcome -> Licence (must accept) -> Ready -> Progress -> Finished. This is
-         WiX's InstallDir dialog set with the folder-choice page skipped: a per-user
-         tool lives in the standard per-user programs folder. -->
+    <!-- Welcome -> Licence (must accept) -> Shortcuts -> Ready -> Progress -> Finished.
+         This is WiX's InstallDir dialog set with the folder-choice page replaced by
+         ShortcutsDlg: a per-user tool lives in the standard per-user programs folder. -->
     <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
     <UI>
-      <Publish Dialog="LicenseAgreementDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Order="10"
+      <Publish Dialog="LicenseAgreementDlg" Control="Next" Event="NewDialog" Value="ShortcutsDlg" Order="10"
                Condition="LicenseAccepted = &quot;1&quot;" />
-      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="LicenseAgreementDlg" Order="10"
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="ShortcutsDlg" Order="10"
                Condition="NOT Installed" />
+
+      <Dialog Id="ShortcutsDlg" Width="370" Height="270" Title="[ProductName] Setup">
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no"
+                 Text="!(loc.InstallDirDlgBannerBitmap)" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes" NoPrefix="yes"
+                 Text="{\WixUI_Font_Title}Shortcuts" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15" Transparent="yes" NoPrefix="yes"
+                 Text="Choose where to add shortcuts to WSL Manager." />
+        <Control Id="StartMenu" Type="CheckBox" X="20" Y="60" Width="330" Height="18" CheckBoxValue="1"
+                 Property="STARTMENUSHORTCUT" Text="Add a shortcut to the &amp;Start menu" />
+        <Control Id="Desktop" Type="CheckBox" X="20" Y="82" Width="330" Height="18" CheckBoxValue="1"
+                 Property="DESKTOPSHORTCUT" Text="Add a shortcut to the &amp;desktop" />
+        <Control Id="Note" Type="Text" X="20" Y="112" Width="330" Height="30" NoPrefix="yes"
+                 Text="Either way, the wslmgr command works in any new terminal." />
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)">
+          <Publish Event="NewDialog" Value="LicenseAgreementDlg" />
+        </Control>
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes"
+                 Text="!(loc.WixUINext)">
+          <Publish Event="NewDialog" Value="VerifyReadyDlg" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes"
+                 Text="!(loc.WixUICancel)">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+      </Dialog>
     </UI>
+
+    <!-- Shortcut choices. A Start menu shortcut is on and a desktop one off by default
+         (msiexec ... STARTMENUSHORTCUT="" DESKTOPSHORTCUT=1 for a silent install).
+         An upgrade keeps the previous choices: it finds them in the registry values
+         that the shortcut components below leave behind. -->
+    <Property Id="STARTMENUSHORTCUT" Value="1" Secure="yes" />
+    <Property Id="PREVIOUSNOSTARTMENU" Secure="yes">
+      <RegistrySearch Id="NoStartMenuSearch" Root="HKCU" Key="Software\WslManager\Installer"
+                      Name="NoStartMenuShortcut" Type="raw" />
+    </Property>
+    <SetProperty Id="STARTMENUSHORTCUT" Value="{}" After="AppSearch" Sequence="first"
+                 Condition="PREVIOUSNOSTARTMENU" />
+    <Property Id="DESKTOPSHORTCUT" Secure="yes">
+      <RegistrySearch Id="DesktopSearch" Root="HKCU" Key="Software\WslManager\Installer" Name="DesktopShortcut"
+                      Type="raw" />
+    </Property>
     <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
 
     <Property Id="ARPCOMMENTS" Value="Create, back up, copy, move and remove WSL instances." />
     <Property Id="ARPURLINFOABOUT" Value="https://www.gnu.org/licenses/gpl-3.0.html" />
     <Property Id="ARPNOREPAIR" Value="1" />
+    <!-- Settings -> Apps shows the app's icon (package.cmd runs from the repository root). -->
+    <Icon Id="AppIcon" SourceFile="src\gui\app.ico" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon" />
 
     <StandardDirectory Id="LocalAppDataFolder">
       <Directory Id="UserProgramsFolder" Name="Programs">
@@ -69,18 +118,36 @@
       </Component>
     </ComponentGroup>
 
+    <!-- Exactly one of StartMenuComponent and NoStartMenuComponent is installed, so an
+         upgrade can tell "turned off" apart from "first install". -->
     <StandardDirectory Id="ProgramMenuFolder">
-      <Component Id="StartMenuComponent">
+      <Component Id="StartMenuComponent" Condition="STARTMENUSHORTCUT">
         <Shortcut Id="GuiShortcut" Name="WSL Manager" Description="Create, back up, copy, move and remove WSL instances"
                   Target="[INSTALLFOLDER]wslmgr-gui.exe" WorkingDirectory="INSTALLFOLDER" />
         <RegistryValue Root="HKCU" Key="Software\WslManager\Installer" Name="Shortcut" Type="integer" Value="1"
                        KeyPath="yes" />
       </Component>
     </StandardDirectory>
+    <Component Id="NoStartMenuComponent" Directory="INSTALLFOLDER" Condition="NOT STARTMENUSHORTCUT">
+      <RegistryValue Root="HKCU" Key="Software\WslManager\Installer" Name="NoStartMenuShortcut" Type="integer"
+                     Value="1" KeyPath="yes" />
+    </Component>
+
+    <StandardDirectory Id="DesktopFolder">
+      <Component Id="DesktopComponent" Condition="DESKTOPSHORTCUT">
+        <Shortcut Id="DesktopShortcut" Name="WSL Manager"
+                  Description="Create, back up, copy, move and remove WSL instances"
+                  Target="[INSTALLFOLDER]wslmgr-gui.exe" WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU" Key="Software\WslManager\Installer" Name="DesktopShortcut" Type="integer"
+                       Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
 
     <Feature Id="Main" Title="WSL Manager">
       <ComponentGroupRef Id="ProgramFiles" />
       <ComponentRef Id="StartMenuComponent" />
+      <ComponentRef Id="NoStartMenuComponent" />
+      <ComponentRef Id="DesktopComponent" />
     </Feature>
   </Package>
 </Wix>

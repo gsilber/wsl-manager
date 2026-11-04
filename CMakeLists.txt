@@ -74,9 +74,10 @@ add_executable(wslmgr-gui WIN32
     src/gui/app.rc
 )
 target_link_libraries(wslmgr-gui PRIVATE wslcore comctl32 shell32 ole32 uxtheme dwmapi gdiplus)
-# app.rc embeds app.manifest (common controls v6, per-monitor DPI awareness).
+# app.rc embeds app.manifest (common controls v6, per-monitor DPI awareness) and app.ico.
 target_link_options(wslmgr-gui PRIVATE /MANIFEST:NO)
-set_property(SOURCE src/gui/app.rc APPEND PROPERTY OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/app.manifest)
+set_property(SOURCE src/gui/app.rc APPEND PROPERTY OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/app.manifest
+             ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/app.ico)
 
 if(WSLMGR_BUILD_TESTS)
     enable_testing()

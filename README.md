@@ -30,12 +30,12 @@ New instances and backups go under a default storage folder. Out of the box this
 Run `WslManager-<version>-x64.msi`. It installs for the current user only and doesn't need administrator rights. It:
 
 - installs both programs to `%LOCALAPPDATA%\Programs\WSL Manager`,
-- adds **WSL Manager** to the Start menu,
+- adds a **WSL Manager** shortcut to the Start menu, the desktop, both or neither. You choose on the Shortcuts page; by default only the Start menu gets one, and an upgrade keeps your earlier choice,
 - adds the install folder to your user `PATH`, so `wslmgr` works in any new terminal.
 
-Installing a newer version replaces the old one. To uninstall, use Settings → Apps → Installed apps. Uninstalling removes the programs, the shortcut and the `PATH` entry. It keeps your default storage folder setting, and it never touches your WSL instances or backups.
+Installing a newer version replaces the old one. To uninstall, use Settings → Apps → Installed apps. Uninstalling removes the programs, the shortcuts and the `PATH` entry. It keeps your default storage folder setting, and it never touches your WSL instances or backups.
 
-For a silent install or uninstall: `msiexec /i WslManager-1.0.0-x64.msi /qn` and `msiexec /x WslManager-1.0.0-x64.msi /qn`.
+For a silent install or uninstall: `msiexec /i WslManager-1.0.0-x64.msi /qn` and `msiexec /x WslManager-1.0.0-x64.msi /qn`. To choose the shortcuts in a silent install, add `DESKTOPSHORTCUT=1` for a desktop shortcut, or `STARTMENUSHORTCUT=""` for no Start menu shortcut.
 
 ## Building
 
@@ -47,6 +47,8 @@ build.cmd Debug
 ```
 
 Both executables link the C runtime statically, so they run without installing the VC++ redistributable.
+
+The application icon, `src/gui/app.ico`, is drawn by `scripts/make-icon.ps1`. To change the icon, edit the script and run `powershell -ExecutionPolicy Bypass -File scripts/make-icon.ps1`, then commit the new `.ico`. The build doesn't run the script.
 
 To build the installer:
 
@@ -113,11 +115,11 @@ If an instance is running and the command needs it stopped, `wslmgr` asks for co
 ```text
 src/core/         WSL operations (registry + wsl.exe), process runner, utilities
 src/cli/          wslmgr.exe (Cli.cpp holds the logic; main.cpp just calls it)
-src/gui/          wslmgr-gui.exe (main window, dialogs, resources, manifest)
+src/gui/          wslmgr-gui.exe (main window, dialogs, resources, manifest, icon)
 tests/            GoogleTest suite and fake_wsl.exe
 installer/        WiX source for the MSI (Package.wxs) and its licence page
 docs/             design document
-scripts/          shared build-script helpers
+scripts/          shared build-script helpers, and make-icon.ps1 (draws src/gui/app.ico)
 ```
 
 ## License

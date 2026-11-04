@@ -187,6 +187,7 @@ struct AppState {
     HWND tooltip = nullptr;
     HWND tabFile = nullptr, tabHome = nullptr, tabView = nullptr;
     HWND expander = nullptr;  // "Activity" toggle above the log
+    HWND details = nullptr;   // scrollable details pane inside detailsCard
     std::vector<RibbonButton> ribbon;
     std::vector<GroupLabel> groupLabels;
     HMENU menus = nullptr;
@@ -201,6 +202,7 @@ struct AppState {
     bool showLog = true;
     RECT ribbonRect{}, progressRect{}, listCard{}, detailsCard{}, logCard{}, statusRect{};
     std::wstring statusText;
+    std::wstring detailsFor;  // instance the details pane shows; a new one scrolls back to the top
     double progressPhase = 0;
 
     std::vector<Distro> distros;
@@ -214,6 +216,8 @@ struct AppState {
 AppState g;
 
 int Scale(int value) { return MulDiv(value, static_cast<int>(g.dpi), 96); }
+
+void UpdateDetails();
 
 // ---------------------------------------------------------------------------
 // Settings (HKCU\Software\WslManager\Gui)
@@ -261,7 +265,7 @@ void SetStatus(const std::wstring& text) {
 }
 
 void ShowError(const std::wstring& message) {
-    MessageBoxW(g.window, message.c_str(), kAppTitle, MB_OK | MB_ICONERROR);
+    ui::ShowMessage(g.window, message.c_str(), kAppTitle, MB_OK | MB_ICONERROR);
 }
 
 // ---------------------------------------------------------------------------
@@ -325,7 +329,7 @@ void PopulateList(const std::wstring& selectName) {
     }
     SendMessageW(g.list, WM_SETREDRAW, TRUE, 0);
     InvalidateRect(g.list, nullptr, TRUE);
-    InvalidateRect(g.window, &g.detailsCard, FALSE);
+    UpdateDetails();
 }
 
 void StartRefresh() {
@@ -412,7 +416,7 @@ void UpdateCommandState() {
         InvalidateRect(b.hwnd, nullptr, FALSE);  // checked state may have changed too
     }
     for (HWND w : {g.tabFile, g.tabHome, g.tabView, g.expander}) InvalidateRect(w, nullptr, FALSE);
-    InvalidateRect(g.window, &g.detailsCard, FALSE);
+    UpdateDetails();
 }
 
 void SetBusy(bool busy) {
@@ -457,7 +461,7 @@ bool ConfirmStop(const Distro& distro, const std::wstring& purpose) {
     if (!distro.running) return true;
     std::wstring question = L"'" + distro.name + L"' is running. It will be stopped to " + purpose +
                             L", which ends any programs running in it.\n\nContinue?";
-    return MessageBoxW(g.window, question.c_str(), kAppTitle, MB_YESNO | MB_ICONWARNING) == IDYES;
+    return ui::ShowMessage(g.window, question.c_str(), kAppTitle, MB_YESNO | MB_ICONWARNING) == IDYES;
 }
 
 const Distro* FindLoaded(const std::wstring& name) {
@@ -475,6 +479,7 @@ void ApplyTheme() {
     ui::ApplyControlTheme(g.list, L"Explorer", L"DarkMode_Explorer");
     ui::ApplyControlTheme(ListView_GetHeader(g.list), nullptr, L"DarkMode_ItemsView");
     ui::ApplyControlTheme(g.log, L"Explorer", L"DarkMode_Explorer");
+    ui::ApplyControlTheme(g.details, L"Explorer", L"DarkMode_Explorer");  // its scroll bar
     ui::ApplyControlTheme(g.tooltip, nullptr, L"DarkMode_Explorer");
     ListView_SetBkColor(g.list, c.card);
     ListView_SetTextBkColor(g.list, c.card);
@@ -602,7 +607,7 @@ void OnCommand(UINT id) {
                 if (EqualsIgnoreCase(name, L"docker-desktop") || EqualsIgnoreCase(name, L"docker-desktop-data"))
                     question += L"\n\nDocker Desktop manages this instance. Changing it outside Docker Desktop "
                                 L"can break Docker.";
-                if (MessageBoxW(g.window, question.c_str(), kAppTitle, MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) !=
+                if (ui::ShowMessage(g.window, question.c_str(), kAppTitle, MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) !=
                     IDYES)
                     return;
             }
@@ -617,7 +622,7 @@ void OnCommand(UINT id) {
             RunOperation(L"Stopping '" + name + L"'", [name](const OutputFn& out) { Terminate(name, out); });
             break;
         case IDM_SHUTDOWN:
-            if (MessageBoxW(g.window, L"Stop all running WSL instances and the WSL virtual machine?", kAppTitle,
+            if (ui::ShowMessage(g.window, L"Stop all running WSL instances and the WSL virtual machine?", kAppTitle,
                             MB_YESNO | MB_ICONQUESTION) != IDYES)
                 return;
             RunOperation(L"Shutting down WSL", [](const OutputFn& out) { Shutdown(out); });
@@ -678,7 +683,7 @@ void OnCommand(UINT id) {
             ChangeThemeMode(ui::ThemeMode::Dark);
             break;
         case IDM_ABOUT:
-            MessageBoxW(g.window,
+            ui::ShowMessage(g.window,
                         (L"WSL Manager 1.0\n\nCreate, back up, copy, move and remove WSL instances.\n\n"
                          L"Default storage folder:\n" + GetDefaultRoot() +
                          L"\n\nCopyright (C) 2026 Greg Silber\n"
@@ -855,22 +860,29 @@ void Layout() {
     int detailsW = g.showDetails && width > Scale(760) ? Scale(300) : 0;
     g.listCard = {m, top, width - m - (detailsW ? detailsW + m : 0), contentBottom};
     g.detailsCard = detailsW ? RECT{width - m - detailsW, top, width - m, contentBottom} : RECT{};
+    if (detailsW) {
+        int inset = Scale(4);
+        MoveWindow(g.details, g.detailsCard.left + inset, g.detailsCard.top + inset, detailsW - 2 * inset,
+                   g.detailsCard.bottom - g.detailsCard.top - 2 * inset, FALSE);
+    }
+    ShowWindow(g.details, detailsW ? SW_SHOWNA : SW_HIDE);
+    UpdateDetails();
     int pad = Scale(4);
     MoveWindow(g.list, g.listCard.left + pad, g.listCard.top + pad, g.listCard.right - g.listCard.left - 2 * pad,
                g.listCard.bottom - g.listCard.top - 2 * pad, FALSE);
 
-    RedrawWindow(g.window, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN);
+    RedrawWindow(g.window, nullptr, nullptr, RDW_INVALIDATE | RDW_FRAME | RDW_ALLCHILDREN);  // frame: scroll bars
 }
 
 // ---------------------------------------------------------------------------
 // Painting
 
-void PaintDetails(HDC dc, const RECT& card) {
+// Draws the details of the selected instance from area.top down, wrapping to the
+// area's width, and returns the y just below the content. The details pane calls
+// it on a scratch DC to measure the content, then again to paint it scrolled.
+int PaintDetails(HDC dc, const RECT& area) {
     const auto& c = ui::Colors();
-    int pad = Scale(18);
-    RECT area = {card.left + pad, card.top + pad, card.right - pad, card.bottom - pad};
     int saved = SaveDC(dc);
-    IntersectClipRect(dc, card.left + 1, card.top + 1, card.right - 1, card.bottom - 1);
     SetBkMode(dc, TRANSPARENT);
 
     const Distro* d = Selected();
@@ -881,7 +893,7 @@ void PaintDetails(HDC dc, const RECT& card) {
         DrawTextW(dc, g.loaded ? L"Select an instance to see its details." : L"Loading instances...", -1, &r,
                   DT_CENTER | DT_WORDBREAK | DT_NOPREFIX);
         RestoreDC(dc, saved);
-        return;
+        return area.top;  // nothing to scroll
     }
 
     int y = area.top;
@@ -934,7 +946,6 @@ void PaintDetails(HDC dc, const RECT& card) {
         {L"Registry ID", d->id},
     };
     for (const auto& [label, value] : properties) {
-        if (y > area.bottom) break;
         SelectObject(dc, g.smallFont);
         SetTextColor(dc, c.textSecondary);
         RECT l = {area.left, y, area.right, y + Scale(16)};
@@ -949,6 +960,123 @@ void PaintDetails(HDC dc, const RECT& card) {
         y = v.bottom + Scale(12);
     }
     RestoreDC(dc, saved);
+    return y - Scale(12);
+}
+
+// ---------------------------------------------------------------------------
+// Details pane: a child window, so it can scroll when its content doesn't fit
+
+constexpr wchar_t kDetailsClass[] = L"WslManagerDetailsPane";
+
+int DetailsPad() { return Scale(14); }
+
+// Content height at the pane's current client width.
+int MeasureDetails() {
+    RECT client;
+    GetClientRect(g.details, &client);
+    HDC screen = GetDC(g.details);
+    HDC scratch = CreateCompatibleDC(screen);
+    HBITMAP bitmap = CreateCompatibleBitmap(screen, 1, 1);
+    HGDIOBJ old = SelectObject(scratch, bitmap);
+    RECT area = {DetailsPad(), DetailsPad(), client.right - DetailsPad(), client.bottom - DetailsPad()};
+    int height = PaintDetails(scratch, area) + DetailsPad();
+    SelectObject(scratch, old);
+    DeleteObject(bitmap);
+    DeleteDC(scratch);
+    ReleaseDC(g.details, screen);
+    return height;
+}
+
+int DetailsScrollPos() { return GetScrollPos(g.details, SB_VERT); }
+
+// Updates the scroll range (which shows or hides the scroll bar) and repaints.
+void UpdateDetails() {
+    if (!g.details || !IsWindowVisible(g.details)) return;
+    const Distro* d = Selected();
+    std::wstring name = d ? d->name : L"";
+    if (name != g.detailsFor) {
+        g.detailsFor = name;
+        SetScrollPos(g.details, SB_VERT, 0, FALSE);
+    }
+    // Showing or hiding the bar changes the width, and so the wrapping: settle in two passes.
+    for (int pass = 0; pass < 2; ++pass) {
+        RECT client;
+        GetClientRect(g.details, &client);
+        SCROLLINFO si{};
+        si.cbSize = sizeof(si);
+        si.fMask = SIF_RANGE | SIF_PAGE;
+        si.nMax = MeasureDetails() - 1;
+        si.nPage = static_cast<UINT>(std::max<LONG>(client.bottom, 1));
+        SetScrollInfo(g.details, SB_VERT, &si, TRUE);
+    }
+    InvalidateRect(g.details, nullptr, FALSE);
+}
+
+void ScrollDetailsTo(int pos) {
+    SCROLLINFO si{};
+    si.cbSize = sizeof(si);
+    si.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
+    GetScrollInfo(g.details, SB_VERT, &si);
+    int maxPos = std::max(0, si.nMax - static_cast<int>(si.nPage) + 1);
+    pos = std::clamp(pos, 0, maxPos);
+    if (pos == si.nPos) return;
+    SetScrollPos(g.details, SB_VERT, pos, TRUE);
+    InvalidateRect(g.details, nullptr, FALSE);
+}
+
+LRESULT CALLBACK DetailsProc(HWND pane, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_PAINT: {
+            PAINTSTRUCT ps;
+            HDC dc = BeginPaint(pane, &ps);
+            RECT client;
+            GetClientRect(pane, &client);
+            HDC buffer = nullptr;
+            HPAINTBUFFER paint = BeginBufferedPaint(dc, &client, BPBF_COMPATIBLEBITMAP, nullptr, &buffer);
+            HDC target = paint ? buffer : dc;
+            FillRect(target, &client, ui::Brush(ui::Colors().card));
+            int top = DetailsPad() - DetailsScrollPos();
+            RECT area = {DetailsPad(), top, client.right - DetailsPad(), top + client.bottom - 2 * DetailsPad()};
+            PaintDetails(target, area);
+            if (paint) EndBufferedPaint(paint, TRUE);
+            EndPaint(pane, &ps);
+            return 0;
+        }
+        case WM_SIZE:
+            UpdateDetails();
+            return 0;
+        case WM_VSCROLL: {
+            SCROLLINFO si{};
+            si.cbSize = sizeof(si);
+            si.fMask = SIF_ALL;
+            GetScrollInfo(pane, SB_VERT, &si);
+            int line = Scale(20), page = std::max(line, static_cast<int>(si.nPage) - line);
+            int pos = si.nPos;
+            switch (LOWORD(wParam)) {
+                case SB_LINEUP: pos -= line; break;
+                case SB_LINEDOWN: pos += line; break;
+                case SB_PAGEUP: pos -= page; break;
+                case SB_PAGEDOWN: pos += page; break;
+                case SB_THUMBTRACK:
+                case SB_THUMBPOSITION: pos = si.nTrackPos; break;
+                case SB_TOP: pos = 0; break;
+                case SB_BOTTOM: pos = si.nMax; break;
+            }
+            ScrollDetailsTo(pos);
+            return 0;
+        }
+        case WM_MOUSEWHEEL: {
+            UINT lines = 3;
+            SystemParametersInfoW(SPI_GETWHEELSCROLLLINES, 0, &lines, 0);
+            if (lines == WHEEL_PAGESCROLL) lines = 10;
+            int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+            ScrollDetailsTo(DetailsScrollPos() - MulDiv(delta, static_cast<int>(lines) * Scale(20), WHEEL_DELTA));
+            return 0;
+        }
+    }
+    return DefWindowProcW(pane, msg, wParam, lParam);
 }
 
 void PaintProgress(HDC dc) {
@@ -986,8 +1114,7 @@ void Paint(HDC dc, const RECT& client) {
 
     ui::FillRound(dc, g.listCard, Scale(8), c.card, c.border);
     if (g.detailsCard.right > g.detailsCard.left) {
-        ui::FillRound(dc, g.detailsCard, Scale(8), c.card, c.border);
-        PaintDetails(dc, g.detailsCard);
+        ui::FillRound(dc, g.detailsCard, Scale(8), c.card, c.border);  // DetailsProc paints the inside
     }
     if (g.showLog) ui::FillRound(dc, g.logCard, Scale(8), c.card, c.border);
 
@@ -1187,6 +1314,9 @@ void CreateControls(HWND window) {
         column.fmt = kColumns[i].format;
         ListView_InsertColumn(g.list, i, &column);
     }
+
+    g.details = CreateWindowExW(0, kDetailsClass, L"", WS_CHILD | WS_VSCROLL, 0, 0, 0, 0, window, nullptr,
+                                g.instance, nullptr);
 
     g.expander = MakeButton(L"Activity", IDM_VIEW_LOG);
     AddTip(g.expander, L"Show or hide the activity log.");
@@ -1419,7 +1549,7 @@ LRESULT CALLBACK WndProc(HWND window, UINT msg, WPARAM wParam, LPARAM lParam) {
 
         case WM_CLOSE:
             if (g.busy &&
-                MessageBoxW(window,
+                ui::ShowMessage(window,
                             (g.operation + L" is still in progress. If you quit now, wsl.exe keeps working in the "
                                            L"background but you won't see the result.\n\nQuit anyway?")
                                 .c_str(),
@@ -1454,9 +1584,19 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     wc.lpfnWndProc = WndProc;
     wc.hInstance = instance;
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    wc.hIcon = static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(IDI_APP), IMAGE_ICON,
+                                             GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), 0));
+    wc.hIconSm = static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(IDI_APP), IMAGE_ICON,
+                                               GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0));
     wc.lpszClassName = kWindowClass;
     RegisterClassExW(&wc);
+    WNDCLASSEXW pane{};
+    pane.cbSize = sizeof(pane);
+    pane.lpfnWndProc = DetailsProc;
+    pane.hInstance = instance;
+    pane.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    pane.lpszClassName = kDetailsClass;
+    RegisterClassExW(&pane);
 
     HWND window = CreateWindowExW(0, kWindowClass, kAppTitle, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT,
                                   CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, nullptr, nullptr, instance, nullptr);

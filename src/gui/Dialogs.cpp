@@ -50,7 +50,7 @@ void Enable(HWND dlg, int id, bool enabled) { EnableWindow(GetDlgItem(dlg, id), 
 bool IsChecked(HWND dlg, int id) { return IsDlgButtonChecked(dlg, id) == BST_CHECKED; }
 
 void ShowError(HWND dlg, const std::wstring& message, int focusId) {
-    MessageBoxW(dlg, message.c_str(), kAppTitle, MB_OK | MB_ICONWARNING);
+    ui::ShowMessage(dlg, message.c_str(), kAppTitle, MB_OK | MB_ICONWARNING);
     if (focusId) SetFocus(GetDlgItem(dlg, focusId));
 }
 
@@ -197,7 +197,7 @@ bool ReadBackupControls(HWND dlg, BackupRequest& request) {
     }
     if (fs::exists(request.file, ec)) {
         std::wstring question = L"The file " + request.file + L" already exists.\n\nOverwrite it?";
-        if (MessageBoxW(dlg, question.c_str(), kAppTitle, MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
+        if (ui::ShowMessage(dlg, question.c_str(), kAppTitle, MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
             return false;
     }
     return true;
@@ -619,7 +619,7 @@ INT_PTR CALLBACK RemoveDialogProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lPar
                     if (r.backupFirst && !ReadBackupControls(dlg, r.backup)) return TRUE;
                     if (!r.backupFirst) {
                         std::wstring question = L"Remove '" + state->distro->name + L"' without a backup?";
-                        if (MessageBoxW(dlg, question.c_str(), kAppTitle, MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) !=
+                        if (ui::ShowMessage(dlg, question.c_str(), kAppTitle, MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) !=
                             IDYES)
                             return TRUE;
                     }

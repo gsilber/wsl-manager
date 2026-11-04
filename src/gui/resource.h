@@ -4,6 +4,9 @@
 #define IDC_STATIC -1
 #endif
 
+// Application icon (the lowest ID, so Explorer and shortcuts use it)
+#define IDI_APP 1
+
 // Menus and accelerators
 #define IDR_MAINMENU 101
 #define IDR_ACCEL 102

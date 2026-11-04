@@ -18,6 +18,7 @@ using std::min;
 
 #include <map>
 #include <string>
+#include <vector>
 
 namespace ui {
 namespace {
@@ -500,7 +501,7 @@ void ThemeDialog(HWND dialog) {
     if (HIWORD(defId) == DC_HASDEFID) info->primaryId = LOWORD(defId);
 
     // The footer band holds OK/Cancel, with the same margin above them as below.
-    for (int id : {IDOK, IDCANCEL}) {
+    for (int id : {IDOK, IDCANCEL, IDYES, IDNO}) {
         if (HWND button = GetDlgItem(dialog, id)) {
             RECT r;
             GetWindowRect(button, &r);
@@ -528,6 +529,198 @@ void ThemeDialog(HWND dialog) {
 
     SetWindowSubclass(dialog, DialogSubclass, 1, reinterpret_cast<DWORD_PTR>(info));
     ApplyWindowFrame(dialog, Colors().card);
+}
+
+// ---------------------------------------------------------------------------
+// Message boxes
+
+namespace {
+
+constexpr int kMessageIcon = 100, kMessageText = 101;
+
+struct MessageState {
+    const wchar_t* text;
+    UINT flags;
+    HFONT iconGlyphFont = nullptr;  // the cross on error icons
+    HFONT iconMarkFont = nullptr;   // "!", "?" and "i" on the others
+};
+
+struct MessageButton {
+    int id;
+    const wchar_t* label;
+};
+
+std::vector<MessageButton> MessageButtons(UINT flags) {
+    switch (flags & MB_TYPEMASK) {
+        case MB_YESNO: return {{IDYES, L"&Yes"}, {IDNO, L"&No"}};
+        case MB_OKCANCEL: return {{IDOK, L"OK"}, {IDCANCEL, L"Cancel"}};
+        default: return {{IDOK, L"OK"}};
+    }
+}
+
+void LayoutMessage(HWND dlg, MessageState& state) {
+    UINT dpi = GetDpiForWindow(dlg);
+    auto px = [dpi](int value) { return MulDiv(value, static_cast<int>(dpi), 96); };
+    HFONT font = reinterpret_cast<HFONT>(SendMessageW(dlg, WM_GETFONT, 0, 0));
+    HINSTANCE instance = GetModuleHandleW(nullptr);
+
+    // Wrap the text at a comfortable reading width.
+    HDC dc = GetDC(dlg);
+    HGDIOBJ oldFont = SelectObject(dc, font);
+    RECT textSize = {0, 0, px(380), 0};
+    DrawTextW(dc, state.text, -1, &textSize, DT_CALCRECT | DT_WORDBREAK | DT_EDITCONTROL | DT_NOPREFIX);
+    SelectObject(dc, oldFont);
+    ReleaseDC(dlg, dc);
+    textSize.right += px(2);
+
+    bool hasIcon = (state.flags & MB_ICONMASK) != 0;
+    int margin = px(24), iconSize = px(32), iconGap = px(16), footerPad = px(16);
+    RECT unit = {0, 0, 0, 16};
+    MapDialogRect(dlg, &unit);
+    int buttonHeight = unit.bottom, buttonWidth = px(96), buttonGap = px(8);
+    auto buttons = MessageButtons(state.flags);
+    int count = static_cast<int>(buttons.size());
+    int buttonsWidth = count * buttonWidth + (count - 1) * buttonGap;
+
+    int textLeft = margin + (hasIcon ? iconSize + iconGap : 0);
+    int clientWidth = std::max<int>(textLeft + textSize.right + margin, buttonsWidth + 2 * margin);
+    clientWidth = std::max(clientWidth, px(320));
+    int bodyHeight = std::max<int>(hasIcon ? iconSize : 0, textSize.bottom);
+    int textTop = margin + (bodyHeight - textSize.bottom) / 2;  // a short message lines up with the icon
+    int footerTop = margin + bodyHeight + margin;
+    int clientHeight = footerTop + footerPad + buttonHeight + footerPad;
+
+    if (hasIcon) {
+        HWND icon = CreateWindowExW(0, WC_STATICW, nullptr, WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, margin, margin,
+                                    iconSize, iconSize, dlg, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kMessageIcon)), instance, nullptr);
+        (void)icon;
+        state.iconGlyphFont = CreateIconFont(iconSize * 9 / 20);
+        state.iconMarkFont = CreateUiFont(dpi, iconSize * 0.62 * 72.0 / dpi, FW_BOLD);
+    }
+    HWND text = CreateWindowExW(0, WC_STATICW, state.text, WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX | SS_EDITCONTROL,
+                                textLeft, textTop, textSize.right, textSize.bottom, dlg,
+                                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kMessageText)), instance, nullptr);
+    SendMessageW(text, WM_SETFONT, reinterpret_cast<WPARAM>(font), FALSE);
+
+    int defaultIndex = ((state.flags & MB_DEFMASK) == MB_DEFBUTTON2 && count > 1) ? 1 : 0;
+    int x = clientWidth - margin - buttonsWidth;
+    HWND defaultButton = nullptr;
+    for (int i = 0; i < count; ++i) {
+        DWORD style = WS_CHILD | WS_VISIBLE | WS_TABSTOP | (i == 0 ? WS_GROUP : 0) |
+                      (i == defaultIndex ? BS_DEFPUSHBUTTON : BS_PUSHBUTTON);
+        HWND button = CreateWindowExW(0, WC_BUTTONW, buttons[i].label, style, x, footerTop + footerPad, buttonWidth,
+                                      buttonHeight, dlg, reinterpret_cast<HMENU>(static_cast<INT_PTR>(buttons[i].id)),
+                                      instance, nullptr);
+        SendMessageW(button, WM_SETFONT, reinterpret_cast<WPARAM>(font), FALSE);
+        if (i == defaultIndex) defaultButton = button;
+        x += buttonWidth + buttonGap;
+    }
+    SendMessageW(dlg, DM_SETDEFID, buttons[defaultIndex].id, 0);
+
+    // Size the window around the client area and centre it over its owner.
+    RECT frame = {0, 0, clientWidth, clientHeight};
+    AdjustWindowRectExForDpi(&frame, static_cast<DWORD>(GetWindowLongW(dlg, GWL_STYLE)), FALSE,
+                             static_cast<DWORD>(GetWindowLongW(dlg, GWL_EXSTYLE)), dpi);
+    int width = frame.right - frame.left, height = frame.bottom - frame.top;
+    HWND owner = GetWindow(dlg, GW_OWNER);
+    MONITORINFO monitor{sizeof(monitor)};
+    GetMonitorInfoW(MonitorFromWindow(owner ? owner : dlg, MONITOR_DEFAULTTONEAREST), &monitor);
+    RECT around = monitor.rcWork;
+    if (owner && IsWindowVisible(owner) && !IsIconic(owner)) GetWindowRect(owner, &around);
+    int left = (around.left + around.right - width) / 2, top = (around.top + around.bottom - height) / 2;
+    left = std::clamp<int>(left, monitor.rcWork.left, std::max<int>(monitor.rcWork.left, monitor.rcWork.right - width));
+    top = std::clamp<int>(top, monitor.rcWork.top, std::max<int>(monitor.rcWork.top, monitor.rcWork.bottom - height));
+    SetWindowPos(dlg, nullptr, left, top, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
+    SetFocus(defaultButton);
+}
+
+void DrawMessageIcon(const DRAWITEMSTRUCT& item, const MessageState& state) {
+    const Palette& c = Colors();
+    HDC dc = item.hDC;
+    RECT r = item.rcItem;
+    FillRect(dc, &r, Brush(c.card));
+    UINT icon = state.flags & MB_ICONMASK;
+    COLORREF circle = icon == MB_ICONERROR ? c.danger : icon == MB_ICONWARNING ? c.warning : c.accentText;
+    // Dark mode's status colours are light, so the mark on them is dark (as in Windows 11).
+    COLORREF mark = IsDark() ? RGB(0x14, 0x14, 0x14) : RGB(0xFF, 0xFF, 0xFF);
+    float size = static_cast<float>(r.right - r.left);
+    FillCircle(dc, r.left + size / 2, r.top + size / 2, size / 2, circle);
+    if (icon == MB_ICONERROR) {
+        DrawGlyph(dc, state.iconGlyphFont, 0xE711 /* Cancel */, r, mark);
+    } else {
+        wchar_t glyph = icon == MB_ICONWARNING ? L'!' : icon == MB_ICONQUESTION ? L'?' : L'i';
+        DrawGlyph(dc, state.iconMarkFont, glyph, r, mark);
+    }
+}
+
+INT_PTR CALLBACK MessageProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam) {
+    auto* state = reinterpret_cast<MessageState*>(GetWindowLongPtrW(dlg, DWLP_USER));
+    switch (msg) {
+        case WM_INITDIALOG:
+            state = reinterpret_cast<MessageState*>(lParam);
+            SetWindowLongPtrW(dlg, DWLP_USER, lParam);
+            LayoutMessage(dlg, *state);
+            ThemeDialog(dlg);
+            MessageBeep(state->flags & MB_ICONMASK);
+            return FALSE;  // LayoutMessage set the focus
+        case WM_DRAWITEM: {
+            auto* item = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
+            if (!state || item->CtlID != kMessageIcon) break;
+            DrawMessageIcon(*item, *state);
+            return TRUE;
+        }
+        case WM_COMMAND: {
+            int id = LOWORD(wParam);
+            if (id == IDCANCEL && !GetDlgItem(dlg, IDCANCEL)) id = GetDlgItem(dlg, IDNO) ? IDNO : IDOK;
+            if (id == IDOK || id == IDCANCEL || id == IDYES || id == IDNO) {
+                EndDialog(dlg, id);
+                return TRUE;
+            }
+            break;
+        }
+        case WM_DESTROY:
+            if (state) {
+                if (state->iconGlyphFont) DeleteObject(state->iconGlyphFont);
+                if (state->iconMarkFont) DeleteObject(state->iconMarkFont);
+                state->iconGlyphFont = state->iconMarkFont = nullptr;
+            }
+            break;
+    }
+    return FALSE;
+}
+
+// An empty dialog template; LayoutMessage adds the controls in pixels.
+std::vector<WORD> MessageTemplate(const wchar_t* title) {
+    std::vector<WORD> t;
+    auto dword = [&t](DWORD value) {
+        t.push_back(LOWORD(value));
+        t.push_back(HIWORD(value));
+    };
+    auto string = [&t](const wchar_t* s) {
+        for (; *s; ++s) t.push_back(static_cast<WORD>(*s));
+        t.push_back(0);
+    };
+    dword(DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU);  // style
+    dword(0);                                                                 // extended style
+    t.push_back(0);                                                           // no controls
+    for (int i = 0; i < 4; ++i) t.push_back(0);                               // x, y, cx, cy
+    t.push_back(0);                                                           // no menu
+    t.push_back(0);                                                           // default class
+    string(title ? title : L"");
+    t.push_back(9);  // point size
+    string(L"Segoe UI");
+    return t;
+}
+
+}  // namespace
+
+int ShowMessage(HWND owner, const wchar_t* text, const wchar_t* title, UINT flags) {
+    MessageState state{text ? text : L"", flags};
+    std::vector<WORD> dialog = MessageTemplate(title);
+    INT_PTR result = DialogBoxIndirectParamW(GetModuleHandleW(nullptr), reinterpret_cast<DLGTEMPLATE*>(dialog.data()),
+                                             owner, MessageProc, reinterpret_cast<LPARAM>(&state));
+    if (result <= 0) return MessageBoxW(owner, state.text, title, flags);  // the dialog couldn't be created
+    return static_cast<int>(result);
 }
 
 }  // namespace ui

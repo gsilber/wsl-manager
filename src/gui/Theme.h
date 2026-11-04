@@ -64,4 +64,9 @@ void DrawGlyph(HDC dc, HFONT font, wchar_t glyph, const RECT& rect, COLORREF col
 // section headings; those in the IDC_HINT range use secondary text.
 void ThemeDialog(HWND dialog);
 
+// A themed replacement for MessageBoxW. Understands MB_OK, MB_OKCANCEL, MB_YESNO,
+// the MB_ICON* flags and MB_DEFBUTTON2, and returns IDOK, IDCANCEL, IDYES or IDNO.
+// Escape or the close box answers Cancel, or No when there is no Cancel button.
+int ShowMessage(HWND owner, const wchar_t* text, const wchar_t* title, UINT flags);
+
 }  // namespace ui
