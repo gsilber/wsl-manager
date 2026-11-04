@@ -1,6 +1,10 @@
-// wslmgr-gui: Win32 front end for the WSL manager core.
+// wslmgr-gui: Win32 front end for the WSL manager core, drawn in a Fluent
+// (Microsoft 365 style) look: a tabbed ribbon, an instance list with a details
+// pane, and a collapsible activity log. Follows Windows' light/dark setting.
 
 #include "Dialogs.h"
+#include "Theme.h"
+#include "core/Environment.h"
 #include "core/Wsl.h"
 #include "resource.h"
 
@@ -12,6 +16,7 @@
 #include <uxtheme.h>
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -31,36 +36,116 @@ constexpr UINT WM_APP_OUTPUT = WM_APP + 1;  // wParam: progress flag, lParam: st
 constexpr UINT WM_APP_DONE = WM_APP + 2;    // lParam: std::wstring* error, or null on success
 constexpr UINT WM_APP_LIST = WM_APP + 3;    // lParam: ListResult*
 constexpr UINT_PTR kRefreshTimer = 1;
+constexpr UINT_PTR kProgressTimer = 2;
 constexpr int kListId = 3001;
 constexpr int kLogId = 3002;
 
+// Code points shared by Segoe Fluent Icons and Segoe MDL2 Assets.
+namespace glyph {
+constexpr wchar_t Add = 0xE710, Copy = 0xE8C8, Save = 0xE74E, MoveToFolder = 0xE8DE, Delete = 0xE74D,
+                  Rename = 0xE8AC, CommandPrompt = 0xE756, FolderOpen = 0xE838, Stop = 0xE71A,
+                  FavoriteStar = 0xE734, Contact = 0xE77B, Shield = 0xEA18, Refresh = 0xE72C, Power = 0xE7E8,
+                  Folder = 0xE8B7, Info = 0xE946, DockRight = 0xE90D, History = 0xE81C, System = 0xE770,
+                  Sunny = 0xE706, Moon = 0xE708, ChevronDown = 0xE70D, ChevronUp = 0xE70E;
+}
+
+// ---------------------------------------------------------------------------
+// Commands and the ribbon
+
 struct Command {
     UINT id;
-    const wchar_t* buttonLabel;  // null for menu-only commands
     bool needsSelection;
 };
 
 constexpr Command kCommands[] = {
-    {IDM_NEW, L"New...", false},
-    {IDM_CLONE, L"Clone...", true},
-    {IDM_BACKUP, L"Back Up...", true},
-    {IDM_MOVE, L"Move...", true},
-    {IDM_REMOVE, L"Remove...", true},
-    {IDM_SETDEFAULT, L"Set Default", true},
-    {IDM_SHELL, L"Open Shell", true},
-    {IDM_STOP, L"Stop", true},
-    {IDM_REFRESH, L"Refresh", false},
-    {IDM_OPENFOLDER, nullptr, true},
-    {IDM_RENAME, nullptr, true},
-    {IDM_DEFAULTUSER, nullptr, true},
-    {IDM_PROTECT, nullptr, true},
-    {IDM_SHUTDOWN, nullptr, false},
-    {IDM_DEFAULTROOT, nullptr, false},
+    {IDM_NEW, false},       {IDM_CLONE, true},     {IDM_BACKUP, true},      {IDM_MOVE, true},
+    {IDM_REMOVE, true},     {IDM_SETDEFAULT, true}, {IDM_SHELL, true},       {IDM_STOP, true},
+    {IDM_REFRESH, false},   {IDM_OPENFOLDER, true}, {IDM_RENAME, true},      {IDM_DEFAULTUSER, true},
+    {IDM_PROTECT, true},    {IDM_SHUTDOWN, false},  {IDM_DEFAULTROOT, false},
 };
+
+// Always available, even while an operation runs.
+constexpr UINT kAlwaysEnabled[] = {IDM_EXIT,         IDM_ABOUT,       IDM_TAB_FILE,     IDM_TAB_HOME,
+                                   IDM_TAB_VIEW,     IDM_VIEW_DETAILS, IDM_VIEW_LOG,    IDM_THEME_SYSTEM,
+                                   IDM_THEME_LIGHT,  IDM_THEME_DARK,  IDM_REFRESH,      IDM_SHELL,
+                                   IDM_OPENFOLDER};
 
 // Commands the core refuses for a protected instance; greyed out instead.
 constexpr UINT kChangesInstance[] = {IDM_CLONE,      IDM_BACKUP, IDM_MOVE,   IDM_REMOVE,
                                      IDM_SETDEFAULT, IDM_STOP,   IDM_RENAME, IDM_DEFAULTUSER};
+
+template <size_t N>
+bool Contains(const UINT (&ids)[N], UINT id) {
+    return std::find(std::begin(ids), std::end(ids), id) != std::end(ids);
+}
+
+enum class Tab { Home, View };
+enum class Tint { Accent, Neutral, Danger };
+
+struct RibbonItem {
+    UINT id;
+    wchar_t glyph;
+    const wchar_t* label;
+    bool large;
+    Tint tint;
+    const wchar_t* tip;
+};
+
+struct RibbonGroup {
+    Tab tab;
+    const wchar_t* label;
+    std::vector<RibbonItem> items;
+};
+
+const std::vector<RibbonGroup>& Ribbon() {
+    static const std::vector<RibbonGroup> groups = {
+        {Tab::Home, L"Create",
+         {{IDM_NEW, glyph::Add, L"New", true, Tint::Accent,
+           L"New instance (Ctrl+N)\nInstall from the online catalog, restore a backup, or copy an instance."},
+          {IDM_CLONE, glyph::Copy, L"Copy", true, Tint::Accent,
+           L"Copy instance\nCreate a new instance from a copy of the selected one."}}},
+        {Tab::Home, L"Run",
+         {{IDM_SHELL, glyph::CommandPrompt, L"Open Shell", true, Tint::Accent,
+           L"Open shell (Enter)\nOpen a terminal on the selected instance."},
+          {IDM_STOP, glyph::Stop, L"Stop", true, Tint::Danger, L"Stop\nStop the selected instance."},
+          {IDM_OPENFOLDER, glyph::FolderOpen, L"Open Folder", true, Tint::Accent,
+           L"Open folder\nOpen the folder that stores the selected instance."}}},
+        {Tab::Home, L"Manage",
+         {{IDM_BACKUP, glyph::Save, L"Back Up", true, Tint::Accent,
+           L"Back up\nExport the selected instance to a backup file."},
+          {IDM_MOVE, glyph::MoveToFolder, L"Move", true, Tint::Accent,
+           L"Move storage\nMove the selected instance's virtual disk to another folder."},
+          {IDM_REMOVE, glyph::Delete, L"Remove", true, Tint::Danger,
+           L"Remove (Del)\nUnregister the selected instance and delete its disk, optionally backing it up first."}}},
+        {Tab::Home, L"Settings",
+         {{IDM_RENAME, glyph::Rename, L"Rename", false, Tint::Neutral, L"Rename the selected instance."},
+          {IDM_SETDEFAULT, glyph::FavoriteStar, L"Set as Default", false, Tint::Neutral,
+           L"Make the selected instance the one wsl.exe starts by default."},
+          {IDM_DEFAULTUSER, glyph::Contact, L"Default User", false, Tint::Neutral,
+           L"Choose the Linux user the selected instance logs in as."},
+          {IDM_PROTECT, glyph::Shield, L"Protect", true, Tint::Accent,
+           L"Protect\nPrevent WSL Manager from changing, stopping or removing the selected instance."}}},
+        {Tab::Home, L"WSL",
+         {{IDM_REFRESH, glyph::Refresh, L"Refresh", false, Tint::Neutral, L"Refresh the instance list (F5)."},
+          {IDM_SHUTDOWN, glyph::Power, L"Shut Down WSL", false, Tint::Neutral,
+           L"Stop all instances and the WSL virtual machine."},
+          {IDM_DEFAULTROOT, glyph::Folder, L"Storage Folder", false, Tint::Neutral,
+           L"Choose the default folder for new instances and backups."}}},
+        {Tab::View, L"Show",
+         {{IDM_VIEW_DETAILS, glyph::DockRight, L"Details Pane", true, Tint::Accent,
+           L"Show or hide the details of the selected instance."},
+          {IDM_VIEW_LOG, glyph::History, L"Activity Log", true, Tint::Accent,
+           L"Show or hide the log of WSL Manager's operations."}}},
+        {Tab::View, L"Theme",
+         {{IDM_THEME_SYSTEM, glyph::System, L"Use Windows Setting", false, Tint::Neutral,
+           L"Follow the light or dark app mode chosen in Windows Settings."},
+          {IDM_THEME_LIGHT, glyph::Sunny, L"Light", false, Tint::Neutral, L"Always use the light theme."},
+          {IDM_THEME_DARK, glyph::Moon, L"Dark", false, Tint::Neutral, L"Always use the dark theme."}}},
+        {Tab::View, L"Help",
+         {{IDM_ABOUT, glyph::Info, L"About", true, Tint::Accent, L"Version, licence and the default storage folder."}}},
+    };
+    return groups;
+}
 
 enum Column { ColName, ColState, ColVersion, ColDefault, ColProtected, ColSize, ColLocation, ColOs };
 
@@ -70,14 +155,28 @@ struct ColumnInfo {
     int format;
 };
 constexpr ColumnInfo kColumns[] = {
-    {L"Name", 200, LVCFMT_LEFT},     {L"State", 80, LVCFMT_LEFT},      {L"WSL", 45, LVCFMT_LEFT},
-    {L"Default", 60, LVCFMT_LEFT},   {L"Protected", 70, LVCFMT_LEFT},  {L"Disk Size", 85, LVCFMT_RIGHT},
-    {L"Location", 300, LVCFMT_LEFT}, {L"OS", 110, LVCFMT_LEFT},
+    {L"Name", 190, LVCFMT_LEFT},     {L"State", 80, LVCFMT_LEFT},      {L"WSL", 45, LVCFMT_LEFT},
+    {L"Default", 60, LVCFMT_LEFT},   {L"Protected", 72, LVCFMT_LEFT},  {L"Disk Size", 80, LVCFMT_RIGHT},
+    {L"Location", 280, LVCFMT_LEFT}, {L"OS", 110, LVCFMT_LEFT},
 };
+
+enum StateImage { ImageStopped, ImageRunning, ImageOther };
 
 struct ListResult {
     std::vector<Distro> distros;
     std::wstring error;
+};
+
+struct RibbonButton {
+    const RibbonItem* item;
+    Tab tab;
+    HWND hwnd;
+    bool compact;  // drawn as a small (icon + label in a row) button in the current layout
+};
+
+struct GroupLabel {
+    RECT rect;
+    const wchar_t* text;
 };
 
 struct AppState {
@@ -85,15 +184,27 @@ struct AppState {
     HWND window = nullptr;
     HWND list = nullptr;
     HWND log = nullptr;
-    HWND status = nullptr;
-    HWND progress = nullptr;
-    std::vector<std::pair<UINT, HWND>> buttons;
-    HFONT font = nullptr;
-    HFONT monoFont = nullptr;
+    HWND tooltip = nullptr;
+    HWND tabFile = nullptr, tabHome = nullptr, tabView = nullptr;
+    HWND expander = nullptr;  // "Activity" toggle above the log
+    std::vector<RibbonButton> ribbon;
+    std::vector<GroupLabel> groupLabels;
+    HMENU menus = nullptr;
+    HIMAGELIST stateImages = nullptr;
+
+    HFONT font = nullptr, semibold = nullptr, title = nullptr, smallFont = nullptr, mono = nullptr;
+    HFONT iconLarge = nullptr, iconSmall = nullptr;
     UINT dpi = 96;
-    HMENU contextMenu = nullptr;
+
+    Tab tab = Tab::Home;
+    bool showDetails = true;
+    bool showLog = true;
+    RECT ribbonRect{}, progressRect{}, listCard{}, detailsCard{}, logCard{}, statusRect{};
+    std::wstring statusText;
+    double progressPhase = 0;
 
     std::vector<Distro> distros;
+    bool loaded = false;
     bool busy = false;
     bool refreshing = false;
     bool refreshAgain = false;
@@ -103,6 +214,23 @@ struct AppState {
 AppState g;
 
 int Scale(int value) { return MulDiv(value, static_cast<int>(g.dpi), 96); }
+
+// ---------------------------------------------------------------------------
+// Settings (HKCU\Software\WslManager\Gui)
+
+std::wstring GuiKey() { return CurrentEnvironment().settingsKey + L"\\Gui"; }
+
+DWORD ReadGuiSetting(const wchar_t* name, DWORD fallback) {
+    DWORD value = 0, size = sizeof(value);
+    if (RegGetValueW(HKEY_CURRENT_USER, GuiKey().c_str(), name, RRF_RT_REG_DWORD, nullptr, &value, &size) !=
+        ERROR_SUCCESS)
+        return fallback;
+    return value;
+}
+
+void WriteGuiSetting(const wchar_t* name, DWORD value) {
+    RegSetKeyValueW(HKEY_CURRENT_USER, GuiKey().c_str(), name, REG_DWORD, &value, sizeof(value));
+}
 
 // ---------------------------------------------------------------------------
 // Log and status
@@ -128,7 +256,8 @@ void AppendLog(const std::wstring& text) {
 }
 
 void SetStatus(const std::wstring& text) {
-    SendMessageW(g.status, SB_SETTEXTW, 0, reinterpret_cast<LPARAM>(text.c_str()));
+    g.statusText = text;
+    InvalidateRect(g.window, &g.statusRect, FALSE);
 }
 
 void ShowError(const std::wstring& message) {
@@ -149,6 +278,20 @@ const Distro* Selected() {
     return i < g.distros.size() ? &g.distros[i] : nullptr;
 }
 
+StateImage ImageFor(const Distro& d) {
+    if (d.running) return ImageRunning;
+    return d.registryState == 1 ? ImageStopped : ImageOther;
+}
+
+COLORREF StateColor(const Distro& d) {
+    const auto& c = ui::Colors();
+    switch (ImageFor(d)) {
+        case ImageRunning: return c.success;
+        case ImageOther: return c.warning;
+        default: return c.textSecondary;
+    }
+}
+
 void SetCell(int row, int column, const std::wstring& text) {
     ListView_SetItemText(g.list, row, column, const_cast<wchar_t*>(text.c_str()));
 }
@@ -160,10 +303,11 @@ void PopulateList(const std::wstring& selectName) {
     for (size_t i = 0; i < g.distros.size(); ++i) {
         const Distro& d = g.distros[i];
         LVITEMW item{};
-        item.mask = LVIF_TEXT | LVIF_PARAM;
+        item.mask = LVIF_TEXT | LVIF_PARAM | LVIF_IMAGE;
         item.iItem = static_cast<int>(i);
         item.pszText = const_cast<wchar_t*>(d.name.c_str());
         item.lParam = static_cast<LPARAM>(i);
+        item.iImage = ImageFor(d);
         int row = ListView_InsertItem(g.list, &item);
         SetCell(row, ColState, StateName(d));
         SetCell(row, ColVersion, std::to_wstring(d.version));
@@ -174,12 +318,14 @@ void PopulateList(const std::wstring& selectName) {
         SetCell(row, ColOs, Trim(d.flavor + L" " + d.osVersion));
         if (EqualsIgnoreCase(d.name, selectName)) selectRow = row;
     }
+    if (selectRow < 0 && !g.distros.empty() && selectName.empty()) selectRow = 0;
     if (selectRow >= 0) {
         ListView_SetItemState(g.list, selectRow, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
         ListView_EnsureVisible(g.list, selectRow, FALSE);
     }
     SendMessageW(g.list, WM_SETREDRAW, TRUE, 0);
     InvalidateRect(g.list, nullptr, TRUE);
+    InvalidateRect(g.window, &g.detailsCard, FALSE);
 }
 
 void StartRefresh() {
@@ -200,31 +346,83 @@ void StartRefresh() {
     }).detach();
 }
 
+// Small anti-aliased status dots for the list, one per StateImage. The image
+// height also sets the row height, giving the list roomier rows.
+HIMAGELIST MakeStateImages() {
+    const auto& c = ui::Colors();
+    int width = Scale(16), height = Scale(30);
+    HIMAGELIST images = ImageList_Create(width, height, ILC_COLOR32, 3, 0);
+    COLORREF colors[] = {c.textSecondary, c.success, c.warning};
+    float radius = Scale(8) / 2.0f;
+    float cx = width / 2.0f, cy = height / 2.0f;
+    for (COLORREF color : colors) {
+        BITMAPINFO info{};
+        info.bmiHeader = {sizeof(BITMAPINFOHEADER), width, -height, 1, 32, BI_RGB};
+        void* bits = nullptr;
+        HBITMAP bitmap = CreateDIBSection(nullptr, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+        auto* pixels = static_cast<DWORD*>(bits);
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                float d = std::hypot(x + 0.5f - cx, y + 0.5f - cy);
+                float a = std::clamp(radius + 0.5f - d, 0.0f, 1.0f);
+                auto pm = [a](int channel) { return static_cast<DWORD>(channel * a + 0.5f); };
+                pixels[y * width + x] = (static_cast<DWORD>(a * 255 + 0.5f) << 24) | (pm(GetRValue(color)) << 16) |
+                                        (pm(GetGValue(color)) << 8) | pm(GetBValue(color));
+            }
+        }
+        ImageList_Add(images, bitmap, nullptr);
+        DeleteObject(bitmap);
+    }
+    return images;
+}
+
 // ---------------------------------------------------------------------------
 // Command state
 
 bool IsCommandEnabled(UINT id) {
-    if (id == IDM_EXIT || id == IDM_ABOUT) return true;
+    if (Contains(kAlwaysEnabled, id) && id != IDM_SHELL && id != IDM_OPENFOLDER) return true;
     // While an operation runs, only harmless commands stay available.
-    if (g.busy && id != IDM_REFRESH && id != IDM_SHELL && id != IDM_OPENFOLDER) return false;
+    if (g.busy && !Contains(kAlwaysEnabled, id)) return false;
     const Distro* selected = Selected();
-    if (selected && selected->isProtected && std::find(std::begin(kChangesInstance), std::end(kChangesInstance), id) !=
-                                                 std::end(kChangesInstance))
-        return false;
+    if (selected && selected->isProtected && Contains(kChangesInstance, id)) return false;
     for (const auto& c : kCommands) {
-        if (c.id == id) return !c.needsSelection || Selected() != nullptr;
+        if (c.id == id) return !c.needsSelection || selected != nullptr;
     }
     return true;
 }
 
+bool IsCommandChecked(UINT id) {
+    switch (id) {
+        case IDM_PROTECT: {
+            const Distro* selected = Selected();
+            return selected && selected->isProtected;
+        }
+        case IDM_VIEW_DETAILS: return g.showDetails;
+        case IDM_VIEW_LOG: return g.showLog;
+        case IDM_THEME_SYSTEM: return ui::GetThemeMode() == ui::ThemeMode::System;
+        case IDM_THEME_LIGHT: return ui::GetThemeMode() == ui::ThemeMode::Light;
+        case IDM_THEME_DARK: return ui::GetThemeMode() == ui::ThemeMode::Dark;
+    }
+    return false;
+}
+
 void UpdateCommandState() {
-    for (auto& [id, button] : g.buttons) EnableWindow(button, IsCommandEnabled(id));
+    for (auto& b : g.ribbon) {
+        EnableWindow(b.hwnd, IsCommandEnabled(b.item->id));
+        InvalidateRect(b.hwnd, nullptr, FALSE);  // checked state may have changed too
+    }
+    for (HWND w : {g.tabFile, g.tabHome, g.tabView, g.expander}) InvalidateRect(w, nullptr, FALSE);
+    InvalidateRect(g.window, &g.detailsCard, FALSE);
 }
 
 void SetBusy(bool busy) {
     g.busy = busy;
-    ShowWindow(g.progress, busy ? SW_SHOW : SW_HIDE);
-    SendMessageW(g.progress, PBM_SETMARQUEE, busy, 30);
+    g.progressPhase = 0;
+    if (busy)
+        SetTimer(g.window, kProgressTimer, 16, nullptr);
+    else
+        KillTimer(g.window, kProgressTimer);
+    InvalidateRect(g.window, &g.progressRect, FALSE);
     UpdateCommandState();
 }
 
@@ -269,6 +467,27 @@ const Distro* FindLoaded(const std::wstring& name) {
 }
 
 // ---------------------------------------------------------------------------
+// Theme
+
+void ApplyTheme() {
+    const auto& c = ui::Colors();
+    ui::ApplyWindowFrame(g.window, c.chrome);
+    ui::ApplyControlTheme(g.list, L"Explorer", L"DarkMode_Explorer");
+    ui::ApplyControlTheme(ListView_GetHeader(g.list), nullptr, L"DarkMode_ItemsView");
+    ui::ApplyControlTheme(g.log, L"Explorer", L"DarkMode_Explorer");
+    ui::ApplyControlTheme(g.tooltip, nullptr, L"DarkMode_Explorer");
+    ListView_SetBkColor(g.list, c.card);
+    ListView_SetTextBkColor(g.list, c.card);
+    ListView_SetTextColor(g.list, c.text);
+    HIMAGELIST old = g.stateImages;
+    g.stateImages = MakeStateImages();
+    ListView_SetImageList(g.list, g.stateImages, LVSIL_SMALL);
+    if (old) ImageList_Destroy(old);
+    ui::FlushMenus();
+    RedrawWindow(g.window, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_FRAME);
+}
+
+// ---------------------------------------------------------------------------
 // Commands
 
 void DoCreate(const std::wstring& cloneSource) {
@@ -302,6 +521,25 @@ void DoCreate(const std::wstring& cloneSource) {
                 break;
         }
     });
+}
+
+void Layout();
+
+void SelectTab(Tab tab) {
+    g.tab = tab;
+    Layout();
+}
+
+void ChangeThemeMode(ui::ThemeMode mode) {
+    ui::SetThemeMode(mode);
+    WriteGuiSetting(L"Theme", static_cast<DWORD>(mode));
+    ApplyTheme();
+}
+
+void ShowFileMenu() {
+    RECT r;
+    GetWindowRect(g.tabFile, &r);
+    TrackPopupMenu(GetSubMenu(g.menus, 0), TPM_LEFTALIGN | TPM_TOPALIGN, r.left, r.bottom, 0, g.window, nullptr);
 }
 
 void OnCommand(UINT id) {
@@ -411,6 +649,34 @@ void OnCommand(UINT id) {
                 }
             }
             break;
+        case IDM_TAB_FILE:
+            ShowFileMenu();
+            break;
+        case IDM_TAB_HOME:
+            SelectTab(Tab::Home);
+            break;
+        case IDM_TAB_VIEW:
+            SelectTab(Tab::View);
+            break;
+        case IDM_VIEW_DETAILS:
+            g.showDetails = !g.showDetails;
+            WriteGuiSetting(L"DetailsPane", g.showDetails);
+            Layout();
+            break;
+        case IDM_VIEW_LOG:
+            g.showLog = !g.showLog;
+            WriteGuiSetting(L"ActivityLog", g.showLog);
+            Layout();
+            break;
+        case IDM_THEME_SYSTEM:
+            ChangeThemeMode(ui::ThemeMode::System);
+            break;
+        case IDM_THEME_LIGHT:
+            ChangeThemeMode(ui::ThemeMode::Light);
+            break;
+        case IDM_THEME_DARK:
+            ChangeThemeMode(ui::ThemeMode::Dark);
+            break;
         case IDM_ABOUT:
             MessageBoxW(g.window,
                         (L"WSL Manager 1.0\n\nCreate, back up, copy, move and remove WSL instances.\n\n"
@@ -426,100 +692,493 @@ void OnCommand(UINT id) {
             PostMessageW(g.window, WM_CLOSE, 0, 0);
             break;
     }
+    UpdateCommandState();
 }
 
 // ---------------------------------------------------------------------------
-// Window setup and layout
+// Fonts and layout
 
 void CreateFonts() {
-    if (g.font) DeleteObject(g.font);
-    if (g.monoFont) DeleteObject(g.monoFont);
-    NONCLIENTMETRICSW metrics{};
-    metrics.cbSize = sizeof(metrics);
-    SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0, g.dpi);
-    g.font = CreateFontIndirectW(&metrics.lfMessageFont);
+    for (HFONT f : {g.font, g.semibold, g.title, g.smallFont, g.mono, g.iconLarge, g.iconSmall})
+        if (f) DeleteObject(f);
+    g.font = ui::CreateUiFont(g.dpi, 9);
+    g.semibold = ui::CreateUiFont(g.dpi, 9, FW_SEMIBOLD);
+    g.title = ui::CreateUiFont(g.dpi, 15, FW_SEMIBOLD);
+    g.smallFont = ui::CreateUiFont(g.dpi, 8);
+    g.iconLarge = ui::CreateIconFont(Scale(24));
+    g.iconSmall = ui::CreateIconFont(Scale(16));
     LOGFONTW mono{};
     mono.lfHeight = -MulDiv(9, static_cast<int>(g.dpi), 72);
     mono.lfQuality = CLEARTYPE_QUALITY;
-    wcscpy_s(mono.lfFaceName, L"Consolas");
-    g.monoFont = CreateFontIndirectW(&mono);
+    wcscpy_s(mono.lfFaceName, L"Cascadia Mono");
+    g.mono = CreateFontIndirectW(&mono);
+    // Fall back to Consolas where Cascadia Mono isn't installed.
+    HDC dc = GetDC(nullptr);
+    HGDIOBJ old = SelectObject(dc, g.mono);
+    wchar_t face[LF_FACESIZE];
+    GetTextFaceW(dc, LF_FACESIZE, face);
+    SelectObject(dc, old);
+    ReleaseDC(nullptr, dc);
+    if (_wcsicmp(face, L"Cascadia Mono") != 0) {
+        DeleteObject(g.mono);
+        wcscpy_s(mono.lfFaceName, L"Consolas");
+        g.mono = CreateFontIndirectW(&mono);
+    }
 }
 
 void ApplyFonts() {
-    for (auto& [id, button] : g.buttons) SendMessageW(button, WM_SETFONT, reinterpret_cast<WPARAM>(g.font), TRUE);
     SendMessageW(g.list, WM_SETFONT, reinterpret_cast<WPARAM>(g.font), TRUE);
-    SendMessageW(g.status, WM_SETFONT, reinterpret_cast<WPARAM>(g.font), TRUE);
-    SendMessageW(g.log, WM_SETFONT, reinterpret_cast<WPARAM>(g.monoFont), TRUE);
+    SendMessageW(g.log, WM_SETFONT, reinterpret_cast<WPARAM>(g.mono), TRUE);
+    SendMessageW(g.tooltip, WM_SETFONT, reinterpret_cast<WPARAM>(g.font), TRUE);
+    SendMessageW(g.tooltip, TTM_SETMAXTIPWIDTH, 0, Scale(320));
 }
 
-int TextWidth(HWND control, const wchar_t* text) {
-    HDC dc = GetDC(control);
-    HGDIOBJ old = SelectObject(dc, g.font);
+int TextWidth(HFONT font, const wchar_t* text) {
+    HDC dc = GetDC(g.window);
+    HGDIOBJ old = SelectObject(dc, font);
     SIZE size{};
     GetTextExtentPoint32W(dc, text, static_cast<int>(wcslen(text)), &size);
     SelectObject(dc, old);
-    ReleaseDC(control, dc);
+    ReleaseDC(g.window, dc);
     return size.cx;
+}
+
+RibbonButton* FindButton(HWND hwnd) {
+    for (auto& b : g.ribbon)
+        if (b.hwnd == hwnd) return &b;
+    return nullptr;
+}
+
+constexpr int kRibbonContent = 68;  // height of the button area, at 96 DPI
+constexpr int kSmallButton = 22;
+
+// Lays out the current tab's groups. In compact mode every button is small,
+// stacked three to a column, for narrow windows. Returns the width needed.
+int LayoutRibbon(bool compact, bool apply) {
+    int left = g.ribbonRect.left;
+    int x = left + Scale(6);
+    int top = g.ribbonRect.top + Scale(6);
+    int contentH = Scale(kRibbonContent);
+    int smallH = Scale(kSmallButton);
+    int smallGap = (contentH - 3 * smallH) / 2;
+    if (apply) g.groupLabels.clear();
+
+    for (const auto& group : Ribbon()) {
+        if (group.tab != g.tab) continue;
+        int groupLeft = x;
+        std::vector<RibbonButton*> column;
+        auto flush = [&] {
+            if (column.empty()) return;
+            int width = 0;
+            for (auto* b : column)
+                width = std::max(width, Scale(30) + TextWidth(g.font, b->item->label) + Scale(10));
+            int y = top;
+            for (auto* b : column) {
+                if (apply) {
+                    b->compact = true;
+                    MoveWindow(b->hwnd, x, y, width, smallH, FALSE);
+                }
+                y += smallH + smallGap;
+            }
+            x += width + Scale(2);
+            column.clear();
+        };
+        for (const auto& item : group.items) {
+            RibbonButton* b = nullptr;
+            for (auto& candidate : g.ribbon)
+                if (candidate.item == &item) b = &candidate;
+            if (!item.large || compact) {
+                column.push_back(b);
+                if (column.size() == 3) flush();
+            } else {
+                flush();
+                int width = std::max(Scale(56), TextWidth(g.font, item.label) + Scale(18));
+                if (apply) {
+                    b->compact = false;
+                    MoveWindow(b->hwnd, x, top, width, contentH, FALSE);
+                }
+                x += width + Scale(2);
+            }
+        }
+        flush();
+        x -= Scale(2);
+        x = std::max(x, groupLeft + TextWidth(g.smallFont, group.label) + Scale(12));
+        if (apply)
+            g.groupLabels.push_back({{groupLeft, top + contentH, x, g.ribbonRect.bottom - Scale(3)}, group.label});
+        x += Scale(17);
+    }
+    return x - Scale(17) + Scale(6) - left;
 }
 
 void Layout() {
     RECT client;
     GetClientRect(g.window, &client);
-    SendMessageW(g.status, WM_SIZE, 0, 0);
-    RECT statusRect;
-    GetWindowRect(g.status, &statusRect);
-    int statusHeight = statusRect.bottom - statusRect.top;
+    int width = client.right, height = client.bottom;
+    int m = Scale(8);
 
-    int margin = Scale(8);
-    int gap = Scale(6);
-    int buttonHeight = Scale(28);
-    int width = client.right - 2 * margin;
-
-    int x = margin;
-    int y = margin;
-    for (auto& [id, button] : g.buttons) {
-        wchar_t label[64];
-        GetWindowTextW(button, label, 64);
-        int buttonWidth = std::max(Scale(72), TextWidth(button, label) + Scale(24));
-        if (x > margin && x + buttonWidth > client.right - margin) {
-            x = margin;
-            y += buttonHeight + gap;
-        }
-        MoveWindow(button, x, y, buttonWidth, buttonHeight, TRUE);
-        x += buttonWidth + gap;
+    // Tabs
+    int tabX = m;
+    for (HWND tab : {g.tabFile, g.tabHome, g.tabView}) {
+        wchar_t text[32];
+        GetWindowTextW(tab, text, 32);
+        int w = TextWidth(g.semibold, text) + Scale(28);
+        MoveWindow(tab, tabX, Scale(3), w, Scale(32), FALSE);
+        tabX += w + Scale(2);
     }
-    y += buttonHeight + margin;
 
-    int bottom = client.bottom - statusHeight - margin;
-    int logHeight = std::clamp((bottom - y) / 3, Scale(80), Scale(220));
-    int listHeight = std::max(Scale(60), bottom - y - logHeight - margin);
-    MoveWindow(g.list, margin, y, width, listHeight, TRUE);
-    MoveWindow(g.log, margin, y + listHeight + margin, width, std::max(0, bottom - (y + listHeight + margin)), TRUE);
+    // Ribbon
+    g.ribbonRect = {m, Scale(38), width - m, Scale(38) + Scale(6 + kRibbonContent + 22)};
+    bool compact = LayoutRibbon(false, false) > g.ribbonRect.right - g.ribbonRect.left;
+    LayoutRibbon(compact, true);
+    for (auto& b : g.ribbon) ShowWindow(b.hwnd, b.tab == g.tab ? SW_SHOWNA : SW_HIDE);
 
-    int parts[] = {std::max(Scale(100), static_cast<int>(client.right) - Scale(180)), -1};
-    SendMessageW(g.status, SB_SETPARTS, 2, reinterpret_cast<LPARAM>(parts));
-    RECT part;
-    SendMessageW(g.status, SB_GETRECT, 1, reinterpret_cast<LPARAM>(&part));
-    InflateRect(&part, -Scale(4), -Scale(3));
-    MoveWindow(g.progress, part.left, part.top, part.right - part.left, part.bottom - part.top, TRUE);
+    g.progressRect = {m + Scale(8), g.ribbonRect.bottom + Scale(3), width - m - Scale(8), g.ribbonRect.bottom + Scale(6)};
+    g.statusRect = {0, height - Scale(28), width, height};
+
+    // Activity log and its expander
+    int top = g.ribbonRect.bottom + Scale(10);
+    int bottom = g.statusRect.top;
+    int logHeight = g.showLog ? std::clamp((bottom - top) / 4, Scale(80), Scale(200)) : 0;
+    g.logCard = {m, bottom - logHeight, width - m, bottom};
+    int expanderW = Scale(34) + TextWidth(g.semibold, L"Activity") + Scale(12);
+    int expanderTop = g.logCard.top - Scale(32);
+    MoveWindow(g.expander, m, expanderTop + Scale(2), expanderW, Scale(28), FALSE);
+    if (g.showLog) {
+        int inset = Scale(6);
+        MoveWindow(g.log, g.logCard.left + inset, g.logCard.top + inset, g.logCard.right - g.logCard.left - 2 * inset,
+                   std::max(0, logHeight - 2 * inset), FALSE);
+    }
+    ShowWindow(g.log, g.showLog ? SW_SHOWNA : SW_HIDE);
+
+    // Instance list and details pane
+    int contentBottom = std::max(top + Scale(60), expanderTop);
+    int detailsW = g.showDetails && width > Scale(760) ? Scale(300) : 0;
+    g.listCard = {m, top, width - m - (detailsW ? detailsW + m : 0), contentBottom};
+    g.detailsCard = detailsW ? RECT{width - m - detailsW, top, width - m, contentBottom} : RECT{};
+    int pad = Scale(4);
+    MoveWindow(g.list, g.listCard.left + pad, g.listCard.top + pad, g.listCard.right - g.listCard.left - 2 * pad,
+               g.listCard.bottom - g.listCard.top - 2 * pad, FALSE);
+
+    RedrawWindow(g.window, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN);
+}
+
+// ---------------------------------------------------------------------------
+// Painting
+
+void PaintDetails(HDC dc, const RECT& card) {
+    const auto& c = ui::Colors();
+    int pad = Scale(18);
+    RECT area = {card.left + pad, card.top + pad, card.right - pad, card.bottom - pad};
+    int saved = SaveDC(dc);
+    IntersectClipRect(dc, card.left + 1, card.top + 1, card.right - 1, card.bottom - 1);
+    SetBkMode(dc, TRANSPARENT);
+
+    const Distro* d = Selected();
+    if (!d) {
+        SelectObject(dc, g.font);
+        SetTextColor(dc, c.textSecondary);
+        RECT r = {area.left, area.top + Scale(24), area.right, area.bottom};
+        DrawTextW(dc, g.loaded ? L"Select an instance to see its details." : L"Loading instances...", -1, &r,
+                  DT_CENTER | DT_WORDBREAK | DT_NOPREFIX);
+        RestoreDC(dc, saved);
+        return;
+    }
+
+    int y = area.top;
+    SelectObject(dc, g.title);
+    SetTextColor(dc, c.text);
+    RECT title = {area.left, y, area.right, y + Scale(30)};
+    DrawTextW(dc, d->name.c_str(), -1, &title, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+    y += Scale(32);
+
+    // State line: dot, state, version, default
+    ui::FillCircle(dc, static_cast<float>(area.left + Scale(4)), static_cast<float>(y + Scale(10)), Scale(8) / 2.0f, StateColor(*d));
+    std::wstring line = StateName(*d) + L"  ·  WSL " + std::to_wstring(d->version);
+    if (d->isDefault) line += L"  ·  Default";
+    SelectObject(dc, g.font);
+    SetTextColor(dc, c.textSecondary);
+    RECT state = {area.left + Scale(16), y, area.right, y + Scale(20)};
+    DrawTextW(dc, line.c_str(), -1, &state, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+    y += Scale(32);
+
+    if (d->isProtected) {
+        const wchar_t* message = L"Protected. WSL Manager won't change, stop or remove this instance.";
+        int textLeft = area.left + Scale(36);
+        RECT measure = {textLeft, 0, area.right - Scale(12), 0};
+        DrawTextW(dc, message, -1, &measure, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+        int barH = (measure.bottom - measure.top) + Scale(20);
+        RECT bar = {area.left, y, area.right, y + barH};
+        ui::FillRound(dc, bar, Scale(4), c.infoBack);
+        RECT icon = {area.left + Scale(8), y, area.left + Scale(30), y + barH};
+        ui::DrawGlyph(dc, g.iconSmall, glyph::Shield, icon, c.accentText);
+        SelectObject(dc, g.font);
+        SetTextColor(dc, c.text);
+        RECT text = {textLeft, y + Scale(10), area.right - Scale(12), bar.bottom - Scale(10)};
+        DrawTextW(dc, message, -1, &text, DT_WORDBREAK | DT_NOPREFIX);
+        y = bar.bottom + Scale(16);
+    }
+
+    RECT divider = {area.left, y, area.right, y + 1};
+    FillRect(dc, &divider, ui::Brush(c.divider));
+    y += Scale(14);
+
+    std::wstring os = Trim(d->flavor + L" " + d->osVersion);
+    std::wstring vhd = d->vhdPath.empty() ? L"None (WSL 1 stores files directly)"
+                                          : fs::path(d->vhdPath).filename().wstring();
+    std::pair<const wchar_t*, std::wstring> properties[] = {
+        {L"Operating system", os.empty() ? L"Unknown" : os},
+        {L"Disk size", d->diskBytes ? FormatBytes(d->diskBytes) : L"Unknown"},
+        {L"Storage folder", d->basePath},
+        {L"Virtual disk", vhd},
+        {L"Default user ID", std::to_wstring(d->defaultUid)},
+        {L"Registry ID", d->id},
+    };
+    for (const auto& [label, value] : properties) {
+        if (y > area.bottom) break;
+        SelectObject(dc, g.smallFont);
+        SetTextColor(dc, c.textSecondary);
+        RECT l = {area.left, y, area.right, y + Scale(16)};
+        DrawTextW(dc, label, -1, &l, DT_SINGLELINE | DT_NOPREFIX);
+        y += Scale(17);
+        SelectObject(dc, g.font);
+        SetTextColor(dc, c.text);
+        RECT v = {area.left, y, area.right, y};
+        DrawTextW(dc, value.c_str(), -1, &v, DT_CALCRECT | DT_WORDBREAK | DT_EDITCONTROL | DT_NOPREFIX);
+        v.right = area.right;
+        DrawTextW(dc, value.c_str(), -1, &v, DT_WORDBREAK | DT_EDITCONTROL | DT_NOPREFIX);
+        y = v.bottom + Scale(12);
+    }
+    RestoreDC(dc, saved);
+}
+
+void PaintProgress(HDC dc) {
+    if (!g.busy) return;
+    const auto& c = ui::Colors();
+    int width = g.progressRect.right - g.progressRect.left;
+    int segment = std::max(Scale(60), width * 3 / 10);
+    int x = g.progressRect.left - segment + static_cast<int>((width + segment) * g.progressPhase);
+    int saved = SaveDC(dc);
+    IntersectClipRect(dc, g.progressRect.left, g.progressRect.top, g.progressRect.right, g.progressRect.bottom);
+    RECT bar = {x, g.progressRect.top, x + segment, g.progressRect.bottom};
+    ui::FillRound(dc, bar, Scale(2), c.accentText);
+    RestoreDC(dc, saved);
+}
+
+void Paint(HDC dc, const RECT& client) {
+    const auto& c = ui::Colors();
+    FillRect(dc, &client, ui::Brush(c.chrome));
+    SetBkMode(dc, TRANSPARENT);
+
+    // Ribbon card, group captions and dividers
+    ui::FillRound(dc, g.ribbonRect, Scale(8), c.card, c.border);
+    SelectObject(dc, g.smallFont);
+    SetTextColor(dc, c.textSecondary);
+    for (size_t i = 0; i < g.groupLabels.size(); ++i) {
+        RECT r = g.groupLabels[i].rect;
+        DrawTextW(dc, g.groupLabels[i].text, -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        if (i + 1 < g.groupLabels.size()) {
+            int x = r.right + Scale(8);
+            RECT line = {x, g.ribbonRect.top + Scale(10), x + 1, g.ribbonRect.bottom - Scale(10)};
+            FillRect(dc, &line, ui::Brush(c.divider));
+        }
+    }
+    PaintProgress(dc);
+
+    ui::FillRound(dc, g.listCard, Scale(8), c.card, c.border);
+    if (g.detailsCard.right > g.detailsCard.left) {
+        ui::FillRound(dc, g.detailsCard, Scale(8), c.card, c.border);
+        PaintDetails(dc, g.detailsCard);
+    }
+    if (g.showLog) ui::FillRound(dc, g.logCard, Scale(8), c.card, c.border);
+
+    SelectObject(dc, g.font);
+    SetTextColor(dc, c.textSecondary);
+    RECT status = g.statusRect;
+    status.left += Scale(14);
+    status.right -= Scale(14);
+    DrawTextW(dc, g.statusText.c_str(), -1, &status, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+}
+
+// Ribbon buttons, tabs and the activity expander are real BUTTON controls (so
+// they work with screen readers and get hot tracking) painted here.
+LRESULT DrawRibbonButton(NMCUSTOMDRAW* cd, const RibbonButton& b) {
+    const auto& c = ui::Colors();
+    HDC dc = cd->hdc;
+    RECT r = cd->rc;
+    bool hot = cd->uItemState & CDIS_HOT;
+    bool pressed = cd->uItemState & CDIS_SELECTED;
+    bool disabled = cd->uItemState & CDIS_DISABLED;
+    bool checked = IsCommandChecked(b.item->id);
+
+    FillRect(dc, &r, ui::Brush(c.card));
+    COLORREF fill = CLR_NONE;
+    if (checked)
+        fill = disabled ? c.hover : pressed ? c.pressed : hot ? ui::Blend(c.checked, c.text, 0.05) : c.checked;
+    else if (!disabled && pressed)
+        fill = c.pressed;
+    else if (!disabled && hot)
+        fill = c.hover;
+    if (fill != CLR_NONE) ui::FillRound(dc, r, Scale(4), fill);
+
+    COLORREF glyphColor = disabled                       ? c.textDisabled
+                          : b.item->tint == Tint::Danger  ? c.danger
+                          : b.item->tint == Tint::Neutral ? c.text
+                                                          : c.accentText;
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, disabled ? c.textDisabled : c.text);
+    if (b.compact) {
+        RECT icon = {r.left + Scale(4), r.top, r.left + Scale(26), r.bottom};
+        ui::DrawGlyph(dc, g.iconSmall, b.item->glyph, icon, glyphColor);
+        SelectObject(dc, g.font);
+        SetTextColor(dc, disabled ? c.textDisabled : c.text);
+        RECT label = {r.left + Scale(30), r.top, r.right - Scale(4), r.bottom};
+        DrawTextW(dc, b.item->label, -1, &label, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
+    } else {
+        RECT icon = {r.left, r.top + Scale(6), r.right, r.top + Scale(40)};
+        ui::DrawGlyph(dc, g.iconLarge, b.item->glyph, icon, glyphColor);
+        SelectObject(dc, g.font);
+        SetTextColor(dc, disabled ? c.textDisabled : c.text);
+        RECT label = {r.left + Scale(2), r.top + Scale(42), r.right - Scale(2), r.bottom - Scale(4)};
+        DrawTextW(dc, b.item->label, -1, &label, DT_SINGLELINE | DT_CENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
+    }
+    return CDRF_SKIPDEFAULT;
+}
+
+LRESULT DrawTab(NMCUSTOMDRAW* cd, bool selected) {
+    const auto& c = ui::Colors();
+    HDC dc = cd->hdc;
+    RECT r = cd->rc;
+    FillRect(dc, &r, ui::Brush(c.chrome));
+    if (cd->uItemState & (CDIS_HOT | CDIS_SELECTED))
+        ui::FillRound(dc, r, Scale(4), (cd->uItemState & CDIS_SELECTED) ? c.pressed : c.chromeHover);
+
+    wchar_t text[32];
+    GetWindowTextW(cd->hdr.hwndFrom, text, 32);
+    HFONT font = selected ? g.semibold : g.font;
+    SelectObject(dc, font);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, c.text);
+    DrawTextW(dc, text, -1, &r, DT_SINGLELINE | DT_CENTER | DT_VCENTER | DT_NOPREFIX);
+    if (selected) {
+        int w = TextWidth(g.semibold, text) - Scale(4);
+        int cx = (r.left + r.right) / 2;
+        RECT bar = {cx - w / 2, r.bottom - Scale(4), cx + w / 2, r.bottom - Scale(1)};
+        ui::FillRound(dc, bar, Scale(2), c.accentText);
+    }
+    return CDRF_SKIPDEFAULT;
+}
+
+LRESULT DrawExpander(NMCUSTOMDRAW* cd) {
+    const auto& c = ui::Colors();
+    HDC dc = cd->hdc;
+    RECT r = cd->rc;
+    FillRect(dc, &r, ui::Brush(c.chrome));
+    if (cd->uItemState & (CDIS_HOT | CDIS_SELECTED))
+        ui::FillRound(dc, r, Scale(4), (cd->uItemState & CDIS_SELECTED) ? c.pressed : c.chromeHover);
+    RECT icon = {r.left + Scale(4), r.top, r.left + Scale(28), r.bottom};
+    HFONT chevron = ui::CreateIconFont(Scale(12));
+    ui::DrawGlyph(dc, chevron, g.showLog ? glyph::ChevronDown : glyph::ChevronUp, icon, c.text);
+    DeleteObject(chevron);
+    SelectObject(dc, g.semibold);
+    SetTextColor(dc, c.text);
+    RECT label = {r.left + Scale(32), r.top, r.right, r.bottom};
+    DrawTextW(dc, L"Activity", -1, &label, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+    return CDRF_SKIPDEFAULT;
+}
+
+LRESULT OnButtonCustomDraw(NMCUSTOMDRAW* cd) {
+    if (cd->dwDrawStage != CDDS_PREPAINT) return CDRF_DODEFAULT;
+    HWND button = cd->hdr.hwndFrom;
+    if (button == g.tabFile) return DrawTab(cd, false);
+    if (button == g.tabHome) return DrawTab(cd, g.tab == Tab::Home);
+    if (button == g.tabView) return DrawTab(cd, g.tab == Tab::View);
+    if (button == g.expander) return DrawExpander(cd);
+    if (const RibbonButton* b = FindButton(button)) return DrawRibbonButton(cd, *b);
+    return CDRF_DODEFAULT;
+}
+
+LRESULT OnListCustomDraw(NMLVCUSTOMDRAW* cd) {
+    const auto& c = ui::Colors();
+    switch (cd->nmcd.dwDrawStage) {
+        case CDDS_PREPAINT:
+            return CDRF_NOTIFYITEMDRAW;
+        case CDDS_ITEMPREPAINT:
+            return CDRF_NOTIFYSUBITEMDRAW;
+        case CDDS_ITEMPREPAINT | CDDS_SUBITEM: {
+            size_t index = static_cast<size_t>(cd->nmcd.lItemlParam);
+            cd->clrText = c.text;
+            if (index < g.distros.size()) {
+                const Distro& d = g.distros[index];
+                if (cd->iSubItem == ColState) cd->clrText = StateColor(d) == c.textSecondary ? c.text : StateColor(d);
+                if (cd->iSubItem == ColLocation || cd->iSubItem == ColOs) cd->clrText = c.textSecondary;
+            }
+            return CDRF_NEWFONT;
+        }
+    }
+    return CDRF_DODEFAULT;
+}
+
+// The header is a child of the list, so its custom-draw notifications go to the
+// list. The dark header style draws its text too dark; recolour it.
+LRESULT CALLBACK ListSubclass(HWND list, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR) {
+    if (msg == WM_NOTIFY) {
+        auto* header = reinterpret_cast<NMHDR*>(lParam);
+        if (header->code == NM_CUSTOMDRAW && header->hwndFrom == ListView_GetHeader(list)) {
+            auto* cd = reinterpret_cast<NMCUSTOMDRAW*>(lParam);
+            if (cd->dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
+            if (cd->dwDrawStage == CDDS_ITEMPREPAINT) {
+                SetTextColor(cd->hdc, ui::Colors().textSecondary);
+                return CDRF_DODEFAULT;
+            }
+        }
+    } else if (msg == WM_NCDESTROY) {
+        RemoveWindowSubclass(list, ListSubclass, 1);
+    }
+    return DefSubclassProc(list, msg, wParam, lParam);
+}
+
+// ---------------------------------------------------------------------------
+// Window setup
+
+HWND MakeButton(const wchar_t* text, UINT id) {
+    return CreateWindowExW(0, WC_BUTTONW, text, WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, g.window,
+                           reinterpret_cast<HMENU>(static_cast<UINT_PTR>(id)), g.instance, nullptr);
+}
+
+void AddTip(HWND control, const wchar_t* text) {
+    TTTOOLINFOW info{};
+    info.cbSize = sizeof(info);
+    info.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+    info.hwnd = g.window;
+    info.uId = reinterpret_cast<UINT_PTR>(control);
+    info.lpszText = const_cast<wchar_t*>(text);
+    SendMessageW(g.tooltip, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&info));
 }
 
 void CreateControls(HWND window) {
-    for (const auto& c : kCommands) {
-        if (!c.buttonLabel) continue;
-        HWND button = CreateWindowExW(0, WC_BUTTONW, c.buttonLabel, WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                                      0, 0, 0, 0, window, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(c.id)),
-                                      g.instance, nullptr);
-        g.buttons.emplace_back(c.id, button);
+    g.tooltip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+                                CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, window, nullptr,
+                                g.instance, nullptr);
+
+    g.tabFile = MakeButton(L"File", IDM_TAB_FILE);
+    g.tabHome = MakeButton(L"Home", IDM_TAB_HOME);
+    g.tabView = MakeButton(L"View", IDM_TAB_VIEW);
+    AddTip(g.tabFile, L"File (Alt+F)");
+
+    for (const auto& group : Ribbon()) {
+        for (const auto& item : group.items) {
+            HWND button = MakeButton(item.label, item.id);
+            g.ribbon.push_back({&item, group.tab, button, !item.large});
+            AddTip(button, item.tip);
+        }
     }
 
     g.list = CreateWindowExW(0, WC_LISTVIEWW, L"",
-                             WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | LVS_REPORT | LVS_SINGLESEL |
-                                 LVS_SHOWSELALWAYS,
+                             WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
                              0, 0, 0, 0, window, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kListId)), g.instance,
                              nullptr);
     ListView_SetExtendedListViewStyle(g.list, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
-    SetWindowTheme(g.list, L"Explorer", nullptr);
+    SetWindowSubclass(g.list, ListSubclass, 1, 0);
     for (int i = 0; i < static_cast<int>(std::size(kColumns)); ++i) {
         LVCOLUMNW column{};
         column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
@@ -529,18 +1188,14 @@ void CreateControls(HWND window) {
         ListView_InsertColumn(g.list, i, &column);
     }
 
-    g.log = CreateWindowExW(WS_EX_CLIENTEDGE, WC_EDITW, L"",
+    g.expander = MakeButton(L"Activity", IDM_VIEW_LOG);
+    AddTip(g.expander, L"Show or hide the activity log.");
+    g.log = CreateWindowExW(0, WC_EDITW, L"",
                             WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_READONLY |
                                 ES_AUTOVSCROLL,
                             0, 0, 0, 0, window, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kLogId)), g.instance,
                             nullptr);
     SendMessageW(g.log, EM_SETLIMITTEXT, 0, 0);
-
-    g.status = CreateWindowExW(0, STATUSCLASSNAMEW, L"", WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP, 0, 0, 0, 0, window,
-                               nullptr, g.instance, nullptr);
-    g.progress = CreateWindowExW(0, PROGRESS_CLASSW, L"", WS_CHILD | PBS_MARQUEE, 0, 0, 0, 0, g.status, nullptr,
-                                 g.instance, nullptr);
-
     ApplyFonts();
 }
 
@@ -548,12 +1203,11 @@ void ShowContextMenu(POINT screen) {
     if (screen.x == -1 && screen.y == -1) {  // keyboard: anchor to the selected row
         int index = ListView_GetNextItem(g.list, -1, LVNI_SELECTED);
         RECT rect{};
-        if (index >= 0)
-            ListView_GetItemRect(g.list, index, &rect, LVIR_LABEL);
+        if (index >= 0) ListView_GetItemRect(g.list, index, &rect, LVIR_LABEL);
         screen = {rect.left, rect.bottom};
         ClientToScreen(g.list, &screen);
     }
-    HMENU menu = GetSubMenu(g.contextMenu, 1);  // the "Instance" menu
+    HMENU menu = GetSubMenu(g.menus, 1);  // the "Instance" menu
     SetMenuDefaultItem(menu, IDM_SHELL, FALSE);
     TrackPopupMenu(menu, TPM_RIGHTBUTTON, screen.x, screen.y, 0, g.window, nullptr);
 }
@@ -563,10 +1217,13 @@ LRESULT CALLBACK WndProc(HWND window, UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_CREATE: {
             g.window = window;
             g.dpi = GetDpiForWindow(window);
-            g.contextMenu = LoadMenuW(g.instance, MAKEINTRESOURCEW(IDR_MAINMENU));
+            g.menus = LoadMenuW(g.instance, MAKEINTRESOURCEW(IDR_MAINMENU));
+            g.showDetails = ReadGuiSetting(L"DetailsPane", 1) != 0;
+            g.showLog = ReadGuiSetting(L"ActivityLog", 1) != 0;
             CreateFonts();
             CreateControls(window);
-            SetWindowPos(window, nullptr, 0, 0, Scale(1060), Scale(660), SWP_NOMOVE | SWP_NOZORDER);
+            ApplyTheme();
+            SetWindowPos(window, nullptr, 0, 0, Scale(1180), Scale(720), SWP_NOMOVE | SWP_NOZORDER);
             Layout();
             UpdateCommandState();
             SetStatus(L"Loading instances...");
@@ -579,13 +1236,33 @@ LRESULT CALLBACK WndProc(HWND window, UINT msg, WPARAM wParam, LPARAM lParam) {
             Layout();
             return 0;
 
+        case WM_ERASEBKGND:
+            return 1;
+
+        case WM_PAINT: {
+            PAINTSTRUCT ps;
+            HDC dc = BeginPaint(window, &ps);
+            RECT client;
+            GetClientRect(window, &client);
+            HDC buffer = nullptr;
+            HPAINTBUFFER paint = BeginBufferedPaint(dc, &client, BPBF_COMPATIBLEBITMAP, nullptr, &buffer);
+            if (paint) {
+                Paint(buffer, client);
+                EndBufferedPaint(paint, TRUE);
+            } else {
+                Paint(dc, client);
+            }
+            EndPaint(window, &ps);
+            return 0;
+        }
+
         case WM_SETFOCUS:
             SetFocus(g.list);
             return 0;
 
         case WM_GETMINMAXINFO: {
             auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
-            info->ptMinTrackSize = {Scale(640), Scale(420)};
+            info->ptMinTrackSize = {Scale(720), Scale(520)};
             return 0;
         }
 
@@ -594,6 +1271,7 @@ LRESULT CALLBACK WndProc(HWND window, UINT msg, WPARAM wParam, LPARAM lParam) {
             g.dpi = HIWORD(wParam);
             CreateFonts();
             ApplyFonts();
+            ApplyTheme();  // rebuilds the status images at the new size
             for (int i = 0; i < static_cast<int>(std::size(kColumns)); ++i)
                 ListView_SetColumnWidth(g.list, i, MulDiv(ListView_GetColumnWidth(g.list, i), g.dpi, oldDpi));
             const RECT* suggested = reinterpret_cast<RECT*>(lParam);
@@ -603,9 +1281,20 @@ LRESULT CALLBACK WndProc(HWND window, UINT msg, WPARAM wParam, LPARAM lParam) {
             return 0;
         }
 
-        case WM_COMMAND:
-            OnCommand(LOWORD(wParam));
+        case WM_SETTINGCHANGE:
+            if (lParam && wcscmp(reinterpret_cast<const wchar_t*>(lParam), L"ImmersiveColorSet") == 0 &&
+                ui::RefreshTheme())
+                ApplyTheme();
+            break;
+
+        case WM_COMMAND: {
+            UINT id = LOWORD(wParam);
+            // A clicked ribbon button takes the focus; give it back to the list so
+            // keyboard shortcuts keep working on the selection.
+            if (lParam && HIWORD(wParam) == BN_CLICKED && id != IDM_TAB_FILE) SetFocus(g.list);
+            OnCommand(id);
             return 0;
+        }
 
         case WM_INITMENUPOPUP: {
             HMENU menu = reinterpret_cast<HMENU>(wParam);
@@ -615,8 +1304,7 @@ LRESULT CALLBACK WndProc(HWND window, UINT msg, WPARAM wParam, LPARAM lParam) {
                 if (id != static_cast<UINT>(-1) && id != 0)
                     EnableMenuItem(menu, id, MF_BYCOMMAND | (IsCommandEnabled(id) ? MF_ENABLED : MF_GRAYED));
             }
-            const Distro* selected = Selected();
-            CheckMenuItem(menu, IDM_PROTECT, MF_BYCOMMAND | (selected && selected->isProtected ? MF_CHECKED : MF_UNCHECKED));
+            CheckMenuItem(menu, IDM_PROTECT, MF_BYCOMMAND | (IsCommandChecked(IDM_PROTECT) ? MF_CHECKED : MF_UNCHECKED));
             return 0;
         }
 
@@ -627,13 +1315,33 @@ LRESULT CALLBACK WndProc(HWND window, UINT msg, WPARAM wParam, LPARAM lParam) {
             }
             break;
 
+        case WM_CTLCOLORSTATIC:  // the read-only log
+        case WM_CTLCOLOREDIT: {
+            const auto& c = ui::Colors();
+            HDC dc = reinterpret_cast<HDC>(wParam);
+            SetTextColor(dc, c.text);
+            SetBkColor(dc, c.card);
+            return reinterpret_cast<LRESULT>(ui::Brush(c.card));
+        }
+
         case WM_NOTIFY: {
             auto* header = reinterpret_cast<NMHDR*>(lParam);
+            if (header->code == NM_CUSTOMDRAW && header->hwndFrom != g.list)
+                return OnButtonCustomDraw(reinterpret_cast<NMCUSTOMDRAW*>(lParam));
             if (header->hwndFrom != g.list) break;
             switch (header->code) {
+                case NM_CUSTOMDRAW:
+                    return OnListCustomDraw(reinterpret_cast<NMLVCUSTOMDRAW*>(lParam));
                 case LVN_ITEMCHANGED:
                     UpdateCommandState();
                     break;
+                case LVN_GETEMPTYMARKUP: {
+                    auto* markup = reinterpret_cast<NMLVEMPTYMARKUP*>(lParam);
+                    markup->dwFlags = EMF_CENTERED;
+                    wcscpy_s(markup->szMarkup, g.loaded ? L"No WSL instances yet. Click New to create one."
+                                                        : L"Loading instances...");
+                    return TRUE;
+                }
                 case NM_DBLCLK:
                 case NM_RETURN:
                     OnCommand(IDM_SHELL);
@@ -649,6 +1357,12 @@ LRESULT CALLBACK WndProc(HWND window, UINT msg, WPARAM wParam, LPARAM lParam) {
             if (wParam == kRefreshTimer) {
                 KillTimer(window, kRefreshTimer);
                 StartRefresh();
+            } else if (wParam == kProgressTimer) {
+                g.progressPhase += 0.008;
+                if (g.progressPhase >= 1) g.progressPhase = 0;
+                RECT r = g.progressRect;
+                InflateRect(&r, 0, 1);
+                InvalidateRect(window, &r, FALSE);
             }
             return 0;
 
@@ -682,13 +1396,15 @@ LRESULT CALLBACK WndProc(HWND window, UINT msg, WPARAM wParam, LPARAM lParam) {
             const Distro* selected = Selected();
             std::wstring selectName = selected ? selected->name : L"";
             if (result->error.empty()) {
+                bool first = !g.loaded;
+                g.loaded = true;
                 g.distros = std::move(result->distros);
-                PopulateList(selectName);
+                PopulateList(first ? L"" : selectName);
                 if (!g.busy) {
                     size_t running = std::count_if(g.distros.begin(), g.distros.end(),
                                                    [](const Distro& d) { return d.running; });
                     SetStatus(std::to_wstring(g.distros.size()) + L" instances, " + std::to_wstring(running) +
-                              L" running.");
+                              L" running");
                 }
             } else {
                 AppendLog(L"Could not list instances: " + result->error);
@@ -713,7 +1429,8 @@ LRESULT CALLBACK WndProc(HWND window, UINT msg, WPARAM wParam, LPARAM lParam) {
             return 0;
 
         case WM_DESTROY:
-            if (g.contextMenu) DestroyMenu(g.contextMenu);
+            if (g.menus) DestroyMenu(g.menus);
+            if (g.stateImages) ImageList_Destroy(g.stateImages);
             PostQuitMessage(0);
             return 0;
     }
@@ -724,10 +1441,13 @@ LRESULT CALLBACK WndProc(HWND window, UINT msg, WPARAM wParam, LPARAM lParam) {
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-    INITCOMMONCONTROLSEX icc{sizeof(icc), ICC_LISTVIEW_CLASSES | ICC_BAR_CLASSES | ICC_PROGRESS_CLASS |
-                                              ICC_STANDARD_CLASSES};
+    INITCOMMONCONTROLSEX icc{sizeof(icc), ICC_LISTVIEW_CLASSES | ICC_BAR_CLASSES | ICC_STANDARD_CLASSES};
     InitCommonControlsEx(&icc);
+    BufferedPaintInit();
     g.instance = instance;
+
+    DWORD mode = ReadGuiSetting(L"Theme", 0);
+    ui::InitTheme(mode <= 2 ? static_cast<ui::ThemeMode>(mode) : ui::ThemeMode::System);
 
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);
@@ -735,13 +1455,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     wc.hInstance = instance;
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
-    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
-    wc.lpszMenuName = MAKEINTRESOURCEW(IDR_MAINMENU);
     wc.lpszClassName = kWindowClass;
     RegisterClassExW(&wc);
 
-    HWND window = CreateWindowExW(0, kWindowClass, kAppTitle, WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
-                                  CW_USEDEFAULT, CW_USEDEFAULT, nullptr, nullptr, instance, nullptr);
+    HWND window = CreateWindowExW(0, kWindowClass, kAppTitle, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT,
+                                  CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, nullptr, nullptr, instance, nullptr);
     if (!window) return 1;
     ShowWindow(window, showCommand);
     UpdateWindow(window);
@@ -754,6 +1472,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
+    BufferedPaintUnInit();
+    ui::ShutdownTheme();
     CoUninitialize();
     return static_cast<int>(msg.wParam);
 }

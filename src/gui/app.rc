@@ -26,12 +26,19 @@ BEGIN
     END
 END
 
+// Popup menus only: the window has a ribbon instead of a menu bar.
+// 0 = the File tab's menu, 1 = the instance list's context menu.
 IDR_MAINMENU MENU
 BEGIN
     POPUP "&File"
     BEGIN
         MENUITEM "&New Instance...\tCtrl+N", IDM_NEW
         MENUITEM "Default &Storage Folder...", IDM_DEFAULTROOT
+        MENUITEM SEPARATOR
+        MENUITEM "&Refresh\tF5", IDM_REFRESH
+        MENUITEM "Shut &Down WSL", IDM_SHUTDOWN
+        MENUITEM SEPARATOR
+        MENUITEM "&About WSL Manager", IDM_ABOUT
         MENUITEM SEPARATOR
         MENUITEM "E&xit", IDM_EXIT
     END
@@ -41,7 +48,7 @@ BEGIN
         MENUITEM "Open Storage &Folder", IDM_OPENFOLDER
         MENUITEM SEPARATOR
         MENUITEM "&Back Up...", IDM_BACKUP
-        MENUITEM "&Clone...", IDM_CLONE
+        MENUITEM "&Copy...", IDM_CLONE
         MENUITEM "&Move Storage...", IDM_MOVE
         MENUITEM "Re&name...", IDM_RENAME
         MENUITEM "Set Default &User...", IDM_DEFAULTUSER
@@ -52,109 +59,105 @@ BEGIN
         MENUITEM SEPARATOR
         MENUITEM "&Remove...\tDel", IDM_REMOVE
     END
-    POPUP "&WSL"
-    BEGIN
-        MENUITEM "&Refresh\tF5", IDM_REFRESH
-        MENUITEM "&Shut Down WSL", IDM_SHUTDOWN
-    END
-    POPUP "&Help"
-    BEGIN
-        MENUITEM "&About WSL Manager", IDM_ABOUT
-    END
 END
 
 IDR_ACCEL ACCELERATORS
 BEGIN
     "N", IDM_NEW, VIRTKEY, CONTROL
     VK_F5, IDM_REFRESH, VIRTKEY
+    "F", IDM_TAB_FILE, VIRTKEY, ALT
 END
 
-IDD_CREATE DIALOGEX 0, 0, 330, 222
+// Dialogs use Fluent spacing: 12 DLU margins, a section heading per group, and a
+// footer band (painted by ui::ThemeDialog) holding the buttons.
+
+IDD_CREATE DIALOGEX 0, 0, 340, 238
 STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "New WSL Instance"
 FONT 9, "Segoe UI", 400, 0, 0x1
 BEGIN
-    GROUPBOX        "Source", IDC_STATIC, 7, 7, 316, 116
-    AUTORADIOBUTTON "&Clean install from the online catalog:", IDC_SRC_CLEAN, 14, 20, 200, 10, WS_GROUP | WS_TABSTOP
-    COMBOBOX        IDC_ONLINE, 26, 33, 196, 160, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
-    AUTOCHECKBOX    "Download from the &web", IDC_WEBDL, 230, 35, 90, 10, WS_TABSTOP
-    AUTORADIOBUTTON "Restore from a &backup file (.tar, .tar.gz, .tar.xz, .vhdx):", IDC_SRC_BACKUP, 14, 54, 260, 10
-    EDITTEXT        IDC_BACKUPFILE, 26, 67, 236, 14, ES_AUTOHSCROLL | WS_TABSTOP
-    PUSHBUTTON      "B&rowse...", IDC_BACKUPBROWSE, 266, 67, 50, 14, WS_TABSTOP
-    AUTORADIOBUTTON "Co&py an existing instance:", IDC_SRC_CLONE, 14, 88, 200, 10
-    COMBOBOX        IDC_CLONESRC, 26, 101, 196, 160, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Source", IDC_HEADING_SOURCE, 12, 10, 200, 11
+    AUTORADIOBUTTON "&Clean install from the online catalog", IDC_SRC_CLEAN, 12, 26, 210, 12, WS_GROUP | WS_TABSTOP
+    COMBOBOX        IDC_ONLINE, 26, 40, 196, 160, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    AUTOCHECKBOX    "Download from the &web", IDC_WEBDL, 230, 41, 98, 12, WS_TABSTOP
+    AUTORADIOBUTTON "Restore from a &backup file (.tar, .tar.gz, .tar.xz, .vhdx)", IDC_SRC_BACKUP, 12, 60, 300, 12
+    EDITTEXT        IDC_BACKUPFILE, 26, 74, 244, 14, ES_AUTOHSCROLL | WS_TABSTOP
+    PUSHBUTTON      "B&rowse...", IDC_BACKUPBROWSE, 274, 73, 54, 16, WS_TABSTOP
+    AUTORADIOBUTTON "Co&py an existing instance", IDC_SRC_CLONE, 12, 94, 210, 12
+    COMBOBOX        IDC_CLONESRC, 26, 108, 196, 160, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
 
-    LTEXT           "&Name:", IDC_STATIC, 7, 135, 60, 8, WS_GROUP
-    EDITTEXT        IDC_NAME, 70, 133, 152, 14, ES_AUTOHSCROLL | WS_TABSTOP
-    LTEXT           "WSL &version:", IDC_STATIC, 230, 135, 46, 8
-    COMBOBOX        IDC_VERSION, 278, 133, 45, 60, CBS_DROPDOWNLIST | WS_TABSTOP
-    LTEXT           "Storage &location:", IDC_STATIC, 7, 155, 60, 8
-    EDITTEXT        IDC_LOCATION, 70, 153, 196, 14, ES_AUTOHSCROLL | WS_TABSTOP
-    PUSHBUTTON      "Br&owse...", IDC_LOCBROWSE, 270, 153, 53, 14, WS_TABSTOP
-    LTEXT           "The instance's virtual disk is stored in this folder. You can move it later.", IDC_STATIC, 70, 171, 253, 8
+    LTEXT           "Instance", IDC_HEADING_INSTANCE, 12, 132, 200, 11, WS_GROUP
+    LTEXT           "&Name:", IDC_STATIC, 12, 150, 60, 8
+    EDITTEXT        IDC_NAME, 76, 148, 146, 14, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "WSL &version:", IDC_STATIC, 232, 150, 48, 8
+    COMBOBOX        IDC_VERSION, 284, 148, 44, 60, CBS_DROPDOWNLIST | WS_TABSTOP
+    LTEXT           "Storage &location:", IDC_STATIC, 12, 170, 62, 8
+    EDITTEXT        IDC_LOCATION, 76, 168, 194, 14, ES_AUTOHSCROLL | WS_TABSTOP
+    PUSHBUTTON      "Br&owse...", IDC_LOCBROWSE, 274, 167, 54, 16, WS_TABSTOP
+    LTEXT           "The instance's virtual disk is stored in this folder. You can move it later.", IDC_HINT_CREATE, 76, 186, 252, 8
 
-    DEFPUSHBUTTON   "Create", IDOK, 212, 201, 54, 14, WS_GROUP
-    PUSHBUTTON      "Cancel", IDCANCEL, 269, 201, 54, 14
+    DEFPUSHBUTTON   "Create", IDOK, 214, 214, 54, 16, WS_GROUP
+    PUSHBUTTON      "Cancel", IDCANCEL, 274, 214, 54, 16
 END
 
-IDD_BACKUP DIALOGEX 0, 0, 300, 100
+IDD_BACKUP DIALOGEX 0, 0, 300, 122
 STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Back Up Instance"
 FONT 9, "Segoe UI", 400, 0, 0x1
 BEGIN
-    LTEXT           "Instance:", IDC_STATIC, 7, 9, 60, 8
-    LTEXT           "", IDC_INFO, 70, 9, 223, 8, SS_ENDELLIPSIS
-    LTEXT           "&Format:", IDC_FORMATLABEL, 7, 27, 60, 8
-    COMBOBOX        IDC_FORMAT, 70, 25, 166, 80, CBS_DROPDOWNLIST | WS_TABSTOP
-    LTEXT           "Backup &file:", IDC_FILELABEL, 7, 47, 60, 8
-    EDITTEXT        IDC_FILE, 70, 45, 166, 14, ES_AUTOHSCROLL | WS_TABSTOP
-    PUSHBUTTON      "B&rowse...", IDC_FILEBROWSE, 240, 45, 53, 14, WS_TABSTOP
-    LTEXT           "A running instance is stopped while it is backed up.", IDC_STATIC, 70, 62, 223, 8
-    DEFPUSHBUTTON   "Back Up", IDOK, 182, 79, 54, 14
-    PUSHBUTTON      "Cancel", IDCANCEL, 239, 79, 54, 14
+    LTEXT           "Instance:", IDC_STATIC, 12, 12, 56, 8
+    LTEXT           "", IDC_INFO, 72, 12, 216, 8, SS_ENDELLIPSIS
+    LTEXT           "&Format:", IDC_FORMATLABEL, 12, 31, 56, 8
+    COMBOBOX        IDC_FORMAT, 72, 29, 158, 80, CBS_DROPDOWNLIST | WS_TABSTOP
+    LTEXT           "Backup &file:", IDC_FILELABEL, 12, 51, 56, 8
+    EDITTEXT        IDC_FILE, 72, 49, 158, 14, ES_AUTOHSCROLL | WS_TABSTOP
+    PUSHBUTTON      "B&rowse...", IDC_FILEBROWSE, 234, 48, 54, 16, WS_TABSTOP
+    LTEXT           "A running instance is stopped while it is backed up.", IDC_HINT_BACKUP, 72, 67, 216, 8
+    DEFPUSHBUTTON   "Back Up", IDOK, 174, 98, 54, 16
+    PUSHBUTTON      "Cancel", IDCANCEL, 234, 98, 54, 16
 END
 
-IDD_MOVE DIALOGEX 0, 0, 300, 96
+IDD_MOVE DIALOGEX 0, 0, 300, 118
 STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Move Instance Storage"
 FONT 9, "Segoe UI", 400, 0, 0x1
 BEGIN
-    LTEXT           "Instance:", IDC_STATIC, 7, 9, 60, 8
-    LTEXT           "", IDC_INFO, 70, 9, 223, 8, SS_ENDELLIPSIS
-    LTEXT           "Current location:", IDC_STATIC, 7, 23, 60, 8
-    LTEXT           "", IDC_CURRENT, 70, 23, 223, 8, SS_PATHELLIPSIS
-    LTEXT           "&New location:", IDC_STATIC, 7, 41, 60, 8
-    EDITTEXT        IDC_LOCATION, 70, 39, 166, 14, ES_AUTOHSCROLL | WS_TABSTOP
-    PUSHBUTTON      "B&rowse...", IDC_LOCBROWSE, 240, 39, 53, 14, WS_TABSTOP
-    LTEXT           "The virtual disk is moved to this folder. A running instance is stopped first.", IDC_STATIC, 70, 56, 223, 8
-    DEFPUSHBUTTON   "Move", IDOK, 182, 75, 54, 14
-    PUSHBUTTON      "Cancel", IDCANCEL, 239, 75, 54, 14
+    LTEXT           "Instance:", IDC_STATIC, 12, 12, 58, 8
+    LTEXT           "", IDC_INFO, 72, 12, 216, 8, SS_ENDELLIPSIS
+    LTEXT           "Current location:", IDC_STATIC, 12, 26, 58, 8
+    LTEXT           "", IDC_CURRENT, 72, 26, 216, 8, SS_PATHELLIPSIS
+    LTEXT           "&New location:", IDC_STATIC, 12, 45, 58, 8
+    EDITTEXT        IDC_LOCATION, 72, 43, 158, 14, ES_AUTOHSCROLL | WS_TABSTOP
+    PUSHBUTTON      "B&rowse...", IDC_LOCBROWSE, 234, 42, 54, 16, WS_TABSTOP
+    LTEXT           "The virtual disk is moved to this folder. A running instance is stopped first.", IDC_HINT_MOVE, 72, 61, 216, 16
+    DEFPUSHBUTTON   "Move", IDOK, 174, 94, 54, 16
+    PUSHBUTTON      "Cancel", IDCANCEL, 234, 94, 54, 16
 END
 
-IDD_REMOVE DIALOGEX 0, 0, 300, 132
+IDD_REMOVE DIALOGEX 0, 0, 300, 150
 STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Remove Instance"
 FONT 9, "Segoe UI", 400, 0, 0x1
 BEGIN
-    LTEXT           "", IDC_INFO, 7, 7, 286, 26
-    AUTOCHECKBOX    "&Back up the instance before removing it", IDC_BACKUPFIRST, 7, 37, 200, 10, WS_TABSTOP
-    LTEXT           "&Format:", IDC_FORMATLABEL, 19, 54, 50, 8
-    COMBOBOX        IDC_FORMAT, 72, 52, 164, 80, CBS_DROPDOWNLIST | WS_TABSTOP
-    LTEXT           "Backup f&ile:", IDC_FILELABEL, 19, 72, 50, 8
-    EDITTEXT        IDC_FILE, 72, 70, 164, 14, ES_AUTOHSCROLL | WS_TABSTOP
-    PUSHBUTTON      "B&rowse...", IDC_FILEBROWSE, 240, 70, 53, 14, WS_TABSTOP
-    AUTOCHECKBOX    "&Delete the storage folder if it is left empty", IDC_DELETEFOLDER, 7, 92, 200, 10, WS_TABSTOP
-    PUSHBUTTON      "Remove", IDOK, 182, 111, 54, 14
-    DEFPUSHBUTTON   "Cancel", IDCANCEL, 239, 111, 54, 14
+    LTEXT           "", IDC_INFO, 12, 10, 276, 26
+    AUTOCHECKBOX    "&Back up the instance before removing it", IDC_BACKUPFIRST, 12, 40, 220, 12, WS_TABSTOP
+    LTEXT           "&Format:", IDC_FORMATLABEL, 26, 59, 44, 8
+    COMBOBOX        IDC_FORMAT, 72, 57, 158, 80, CBS_DROPDOWNLIST | WS_TABSTOP
+    LTEXT           "Backup f&ile:", IDC_FILELABEL, 26, 79, 44, 8
+    EDITTEXT        IDC_FILE, 72, 77, 158, 14, ES_AUTOHSCROLL | WS_TABSTOP
+    PUSHBUTTON      "B&rowse...", IDC_FILEBROWSE, 234, 76, 54, 16, WS_TABSTOP
+    AUTOCHECKBOX    "&Delete the storage folder if it is left empty", IDC_DELETEFOLDER, 12, 98, 220, 12, WS_TABSTOP
+    PUSHBUTTON      "Remove", IDOK, 174, 126, 54, 16
+    DEFPUSHBUTTON   "Cancel", IDCANCEL, 234, 126, 54, 16
 END
 
-IDD_TEXT DIALOGEX 0, 0, 240, 64
+IDD_TEXT DIALOGEX 0, 0, 250, 84
 STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION ""
 FONT 9, "Segoe UI", 400, 0, 0x1
 BEGIN
-    LTEXT           "", IDC_PROMPT, 7, 7, 226, 8
-    EDITTEXT        IDC_TEXT, 7, 19, 226, 14, ES_AUTOHSCROLL | WS_TABSTOP
-    DEFPUSHBUTTON   "OK", IDOK, 126, 43, 54, 14
-    PUSHBUTTON      "Cancel", IDCANCEL, 182, 43, 54, 14
+    LTEXT           "", IDC_PROMPT, 12, 12, 226, 8
+    EDITTEXT        IDC_TEXT, 12, 25, 226, 14, ES_AUTOHSCROLL | WS_TABSTOP
+    DEFPUSHBUTTON   "OK", IDOK, 124, 60, 54, 16
+    PUSHBUTTON      "Cancel", IDCANCEL, 184, 60, 54, 16
 END

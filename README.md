@@ -11,8 +11,17 @@ A native Windows tool for managing WSL instances. You can create instances, back
 - **Back up** an instance in any export format. A small `<file>.wslmeta` file is saved next to the backup. When you restore the backup, it brings back the default Linux user, which `wsl --import` would otherwise reset to root.
 - **Remove** an instance, with an optional backup first. You can also choose to delete its storage folder if nothing else is left in it.
 - **Move** an instance's storage to another folder (`wsl --manage --move`).
-- **Protect** an instance so WSL Manager won't remove, move, rename, stop, back up or copy it, make it the default, or change its default user. Backing up and copying count as changes because both stop the instance. `docker-desktop` (and the older `docker-desktop-data`) are protected by default, because Docker Desktop manages them. Toggle protection with Instance → Protected, or with `wslmgr protect` / `wslmgr unprotect`. You can still view a protected instance and open a shell on it.
+- **Protect** an instance so WSL Manager won't remove, move, rename, stop, back up or copy it, make it the default, or change its default user. Backing up and copying count as changes because both stop the instance. `docker-desktop` (and the older `docker-desktop-data`) are protected by default, because Docker Desktop manages them. Toggle protection with Home → Protect (or right-click → Protected), or with `wslmgr protect` / `wslmgr unprotect`. You can still view a protected instance and open a shell on it.
 - **Other tasks:** rename an instance, set the default instance, set the default user, stop an instance, shut down WSL, and open a shell or the storage folder.
+
+The GUI looks like current Microsoft 365 apps:
+
+- An Office-style ribbon (File, Home, View) with Fluent icons and tooltips.
+- The instance list, with a status dot for each instance.
+- A details pane for the selected instance.
+- A collapsible activity log.
+
+It follows Windows' light or dark app mode. To fix it to one theme, use View → Light or Dark. You can show or hide the details pane and activity log on the View tab too.
 
 New instances and backups go under a default storage folder. Out of the box this is `%USERPROFILE%\WSL`. Change it under File → Default Storage Folder or with `wslmgr config --default-folder <folder>`. The GUI also remembers the parent folder you used the last time you created an instance.
 

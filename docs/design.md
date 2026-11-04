@@ -40,7 +40,7 @@ The code has three layers, and each depends only on the layer below it:
 |---|---|---|
 | **Core** | `src/core/` | All WSL logic. It has no UI code. Every operation is a blocking function that throws `WslError` and reports progress through an `OutputFn` callback. |
 | **CLI** | `src/cli/Cli.cpp`, `main.cpp` | Parses arguments, confirms risky actions, and prints output. `RunCli()` lives in a library so the tests can call it directly. |
-| **GUI** | `src/gui/` | A Win32 window with a list view, a log pane and modal dialogs. It runs core operations on worker threads. |
+| **GUI** | `src/gui/` | A Win32 window in a Fluent (Microsoft 365) style: a ribbon, an instance list with a details pane, an activity log and themed modal dialogs. It runs core operations on worker threads. |
 
 Both front ends are thin. Anything that both need, such as default backup paths, name validation or format handling, belongs in the core.
 
@@ -130,6 +130,22 @@ Operations that need an instance stopped (backup, copy, move, rename and remove)
 - **WiX version:** the project pins WiX **5.0.2** and its UI extension (`WixToolset.UI.wixext`, the same version) as a repo-local dotnet tool. `package.cmd` caches the extension in `.wix/`, which is git-ignored. WiX 6 and later require accepting the Open Source Maintenance Fee terms. Moving to them is a licensing decision, not just a version bump.
 
 The installer was checked by hand: silent install, then upgrading 1.0.0 to 1.0.1, then uninstall. It installed with no elevation, left one registered product and one PATH entry after the upgrade, and on uninstall restored the original `PATH` exactly and kept the user's setting.
+
+## GUI look and feel
+
+The GUI follows the Fluent design of current Microsoft 365 apps, built from plain Win32 with no UI framework.
+
+- **Layout:** the window has an Office-style ribbon with tabs (File, Home, View) above three areas: the instance list, a details pane for the selection, and a collapsible activity log. A status line sits at the bottom, and an indeterminate progress strip runs under the ribbon while an operation is busy. There is no menu bar. File opens a popup menu, and right-clicking an instance opens the Instance context menu. Both come from `IDR_MAINMENU`.
+- **Real controls, custom painted:** the ribbon buttons, tabs and dialog buttons are ordinary `BUTTON` controls painted through `NM_CUSTOMDRAW`, not regions of one canvas. They keep keyboard focus, hot tracking, enable/disable state, tooltips and screen-reader names. Check boxes and radio buttons are drawn the same way, because the system draws their text in black regardless of the dark theme.
+- **Icons:** the icons are glyphs from Segoe Fluent Icons (Windows 11), falling back to Segoe MDL2 Assets (Windows 10). They scale with DPI and take the theme colour, so the project has no image assets.
+- **Light and dark:** `Theme.cpp` holds both palettes, after Fluent 2's neutral and brand ramps.
+  - The window follows Windows' app mode unless the user picks Light or Dark on the View tab.
+  - The title bar uses `DWMWA_USE_IMMERSIVE_DARK_MODE` and `DWMWA_CAPTION_COLOR`, so it blends into the window.
+  - The list, log and scroll bars use the system's `DarkMode_*` visual styles.
+  - Dark popup menus and scroll bars need three undocumented `uxtheme.dll` exports (`SetPreferredAppMode`, `AllowDarkModeForWindow`, `FlushMenuThemes`). Windows' own apps use them, but they're looked up by ordinal and skipped if missing, so the worst case is light menus.
+- **Rendering:** rounded shapes and dots are drawn anti-aliased with GDI+, and text with GDI ClearType. The window paints through a buffered paint, so it doesn't flicker.
+- **Dialogs:** `ui::ThemeDialog()` subclasses each dialog in `WM_INITDIALOG`. It paints the white or dark body and the grey footer band behind OK and Cancel, colours the statics, edit boxes and lists, and styles statics by ID range: `IDC_HEADING_*` statics become section headings, and `IDC_HINT_*` statics use secondary text. Message boxes stay standard Windows message boxes.
+- **Settings:** the theme choice and the pane visibility are DWORDs under `HKCU\Software\WslManager\Gui`.
 
 ## GUI threading model
 

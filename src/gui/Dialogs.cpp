@@ -1,5 +1,6 @@
 #include "Dialogs.h"
 
+#include "Theme.h"
 #include "resource.h"
 
 #include <commctrl.h>
@@ -387,6 +388,7 @@ INT_PTR CALLBACK CreateDialogProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lPar
     switch (msg) {
         case WM_INITDIALOG: {
             state = reinterpret_cast<CreateState*>(lParam);
+            ui::ThemeDialog(dlg);
             SetWindowLongPtrW(dlg, DWLP_USER, lParam);
 
             ComboAdd(dlg, IDC_VERSION, L"2", 2);
@@ -504,6 +506,7 @@ INT_PTR CALLBACK BackupDialogProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lPar
     switch (msg) {
         case WM_INITDIALOG:
             state = reinterpret_cast<BackupState*>(lParam);
+            ui::ThemeDialog(dlg);
             SetWindowLongPtrW(dlg, DWLP_USER, lParam);
             SetDlgItemTextW(dlg, IDC_INFO, state->distro->name.c_str());
             InitBackupControls(dlg, *state->distro);
@@ -533,6 +536,7 @@ INT_PTR CALLBACK MoveDialogProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam
     switch (msg) {
         case WM_INITDIALOG: {
             state = reinterpret_cast<MoveState*>(lParam);
+            ui::ThemeDialog(dlg);
             SetWindowLongPtrW(dlg, DWLP_USER, lParam);
             const Distro& d = *state->distro;
             SetDlgItemTextW(dlg, IDC_INFO, d.name.c_str());
@@ -589,6 +593,7 @@ INT_PTR CALLBACK RemoveDialogProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lPar
     switch (msg) {
         case WM_INITDIALOG: {
             state = reinterpret_cast<RemoveState*>(lParam);
+            ui::ThemeDialog(dlg);
             SetWindowLongPtrW(dlg, DWLP_USER, lParam);
             const Distro& d = *state->distro;
             std::wstring info = L"This permanently deletes '" + d.name + L"'";
@@ -639,6 +644,7 @@ INT_PTR CALLBACK TextDialogProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam
     switch (msg) {
         case WM_INITDIALOG:
             state = reinterpret_cast<TextState*>(lParam);
+            ui::ThemeDialog(dlg);
             SetWindowLongPtrW(dlg, DWLP_USER, lParam);
             SetWindowTextW(dlg, state->title.c_str());
             SetDlgItemTextW(dlg, IDC_PROMPT, state->prompt.c_str());

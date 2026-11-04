@@ -98,7 +98,7 @@ Distro RequireUnprotected(std::wstring_view name, const wchar_t* what) {
     Distro distro = RequireDistro(name);
     if (distro.isProtected)
         throw WslError(L"'" + distro.name + L"' is protected, so WSL Manager won't " + what +
-                       L". If you're sure, unprotect it first (Instance > Protected in the app, or "
+                       L". If you're sure, unprotect it first (Protect on the app's Home tab, or "
                        L"wslmgr unprotect " + distro.name + L").");
     return distro;
 }

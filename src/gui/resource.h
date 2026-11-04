@@ -40,6 +40,18 @@
 #define IDC_FORMATLABEL 1022
 #define IDC_FILELABEL 1023
 
+// Statics in these ranges are styled by ui::ThemeDialog: section headings and
+// secondary (hint) text.
+#define IDC_HEADING_FIRST 1100
+#define IDC_HEADING_SOURCE 1100
+#define IDC_HEADING_INSTANCE 1101
+#define IDC_HEADING_LAST 1109
+#define IDC_HINT_FIRST 1110
+#define IDC_HINT_CREATE 1110
+#define IDC_HINT_BACKUP 1111
+#define IDC_HINT_MOVE 1112
+#define IDC_HINT_LAST 1119
+
 // Commands (menu items, toolbar buttons and accelerators share these)
 #define IDM_NEW 40001
 #define IDM_CLONE 40002
@@ -58,3 +70,13 @@
 #define IDM_EXIT 40015
 #define IDM_ABOUT 40016
 #define IDM_PROTECT 40017
+
+// Ribbon tabs and the View tab
+#define IDM_TAB_FILE 40020
+#define IDM_TAB_HOME 40021
+#define IDM_TAB_VIEW 40022
+#define IDM_VIEW_DETAILS 40023
+#define IDM_VIEW_LOG 40024
+#define IDM_THEME_SYSTEM 40025
+#define IDM_THEME_LIGHT 40026
+#define IDM_THEME_DARK 40027

@@ -382,7 +382,7 @@ TEST_F(ProtectionTest, TheMessageSaysHowToUnprotect) {
     SetProtected(L"Prod", true);
     ExpectError([] { Remove(L"Prod", false, nullptr); },
                 L"'Prod' is protected, so WSL Manager won't remove it. If you're sure, unprotect it first "
-                L"(Instance > Protected in the app, or wslmgr unprotect Prod).");
+                L"(Protect on the app's Home tab, or wslmgr unprotect Prod).");
 }
 
 TEST_F(ProtectionTest, ReadOnlyActionsStillWork) {
