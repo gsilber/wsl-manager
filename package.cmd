@@ -8,6 +8,13 @@ setlocal
 
 call "%~dp0scripts\vs-env.cmd" || exit /b 1
 
+where dotnet >nul 2>&1 || (
+    echo The .NET SDK was not found on PATH. It is needed to run WiX, which builds the MSI.
+    echo Install it with:  winget install Microsoft.DotNet.SDK.8
+    echo then open a new terminal and run package.cmd again.
+    exit /b 1
+)
+
 set "BUILD_DIR=%~dp0build\package"
 cmake -S "%~dp0." -B "%BUILD_DIR%" -G Ninja -DCMAKE_BUILD_TYPE=Release || exit /b 1
 cmake --build "%BUILD_DIR%" || exit /b 1
