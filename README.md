@@ -138,6 +138,10 @@ docs/             design document
 scripts/          shared build-script helpers, and make-icon.ps1 (draws src/gui/app.ico)
 ```
 
+## Support
+
+For help, bug reports and feature requests, see [SUPPORT.md](SUPPORT.md), open an issue at https://github.com/gsilber/wsl-manager/issues, or email gsilbercd@gmail.com. The privacy policy is in [PRIVACY.md](PRIVACY.md).
+
 ## License
 
 Copyright (C) 2026 Greg Silber
