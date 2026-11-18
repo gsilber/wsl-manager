@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(WslManager VERSION 1.0.0 LANGUAGES CXX RC)
+project(WslManager VERSION 1.0.1 LANGUAGES CXX RC)
 
 if(NOT WIN32 OR NOT MSVC)
     message(FATAL_ERROR "WSL Manager is a Windows application and must be built with MSVC.")
