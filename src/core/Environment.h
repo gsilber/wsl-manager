@@ -13,6 +13,9 @@ struct Environment {
     std::wstring settingsKey = L"Software\\WslManager";                            // under HKCU
     unsigned long diskReleaseTimeoutMs = 120000;
     unsigned long diskReleasePollMs = 2000;
+    // Whether this is the Microsoft Store (MSIX) build: -1 detects it from the
+    // process's package identity; tests force 0 or 1.
+    int packaged = -1;
 };
 
 Environment& CurrentEnvironment();

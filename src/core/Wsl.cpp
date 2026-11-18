@@ -4,6 +4,7 @@
 #include "Process.h"
 
 #include <windows.h>
+#include <appmodel.h>
 
 #include <algorithm>
 #include <cwctype>
@@ -155,9 +156,38 @@ bool RemoveFolderIfEmpty(const std::wstring& folder) {
     return RemoveDirectoryW(folder.c_str()) != 0;
 }
 
+bool RunningPackaged() {
+    int forced = CurrentEnvironment().packaged;
+    if (forced >= 0) return forced != 0;
+    UINT32 length = 0;
+    return GetCurrentPackageFullName(&length, nullptr) != APPMODEL_ERROR_NO_PACKAGE;
+}
+
+// In the Microsoft Store (MSIX) build, Windows keeps new files and folders that the
+// app creates under %USERPROFILE%\AppData private to the app (MSIX file-system
+// virtualization), so wsl.exe and the WSL service couldn't use them. The Store build
+// therefore creates instances and backups only outside AppData.
+void RejectPrivateLocation(const std::wstring& folder) {
+    if (!RunningPackaged()) return;
+    wchar_t profile[MAX_PATH];
+    DWORD len = GetEnvironmentVariableW(L"USERPROFILE", profile, MAX_PATH);
+    if (len == 0 || len >= MAX_PATH) return;
+    std::wstring appData = NormalizeFolder((fs::path(std::wstring(profile, len)) / L"AppData").wstring());
+    std::wstring path = NormalizeFolder(folder);
+    bool inside = path.size() >= appData.size() &&
+                  EqualsIgnoreCase(std::wstring_view(path).substr(0, appData.size()), appData) &&
+                  (path.size() == appData.size() || path[appData.size()] == L'\\');
+    if (inside)
+        throw WslError(L"The Microsoft Store version can't store instances or backups inside AppData:\n" + path +
+                       L"\n\nWindows keeps files that Store apps create there private to the app, so WSL couldn't "
+                       L"use them. Choose a folder outside AppData, such as " +
+                       (fs::path(std::wstring(profile, len)) / L"WSL").wstring() + L".");
+}
+
 // Checks that `location` can hold a new virtual disk and creates the folder.
 std::wstring PrepareTargetFolder(std::wstring_view location) {
     std::wstring folder = NormalizeFolder(location);
+    RejectPrivateLocation(folder);
     std::error_code ec;
     if (fs::exists(folder, ec) && !fs::is_directory(folder, ec))
         throw WslError(L"The storage location is a file, not a folder:\n" + folder);
@@ -544,6 +574,7 @@ void Backup(std::wstring_view name, std::wstring_view file, BackupFormat format,
     if (path.empty()) throw WslError(L"No backup file was given.");
     std::error_code ec;
     fs::path parent = fs::path(path).parent_path();
+    RejectPrivateLocation(parent.wstring());
     fs::create_directories(parent, ec);
     if (ec) throw WslError(L"Could not create the folder " + parent.wstring() + L":\n" + LastErrorMessage(ec.value()));
 

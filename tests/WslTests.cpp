@@ -777,3 +777,80 @@ TEST_F(ManageTest, OpenShellLaunchesWsl) {
     EXPECT_TRUE(Called(L"--distribution\tDev\t--cd\t~"));
     ExpectError([] { OpenShell(L"Missing"); }, L"no WSL instance");
 }
+
+// The Microsoft Store (MSIX) build keeps file-system virtualization on, so it must
+// not create instance folders or backups under AppData (WSL couldn't see them).
+class PackagedTest : public test::WslTest {
+protected:
+    void SetUp() override {
+        WslTest::SetUp();
+        DWORD len = GetEnvironmentVariableW(L"USERPROFILE", savedProfile_, MAX_PATH);
+        hadProfile_ = len > 0 && len < MAX_PATH;
+        profile_ = Path(L"profile");
+        SetEnvironmentVariableW(L"USERPROFILE", profile_.c_str());
+        CurrentEnvironment().packaged = 1;
+    }
+    void TearDown() override {
+        SetEnvironmentVariableW(L"USERPROFILE", hadProfile_ ? savedProfile_ : nullptr);
+        WslTest::TearDown();
+    }
+    fs::path In(const std::wstring& relative) const { return profile_ / relative; }
+
+    fs::path profile_;
+
+private:
+    wchar_t savedProfile_[MAX_PATH] = {};
+    bool hadProfile_ = false;
+};
+
+TEST_F(PackagedTest, RefusesToCreateInstancesInsideAppData) {
+    AddDistro({.name = L"Dev"});
+    ExpectError([&] { InstallClean({L"Ubuntu", L"X", In(L"AppData\\Local\\WSL\\X").wstring()}, nullptr); },
+                L"can't store instances or backups inside AppData");
+    ExpectError([&] { Clone(L"Dev", L"Y", In(L"appdata\\roaming\\Y").wstring(), nullptr); }, L"inside AppData");
+    ExpectError([&] { Move(L"Dev", In(L"AppData").wstring(), nullptr); }, L"inside AppData");
+    WriteFile(Path(L"b.tar"), "tar");
+    ExpectError([&] { RestoreBackup(L"Z", In(L"AppData\\LocalLow\\Z").wstring(), Path(L"b.tar").wstring(), 2, nullptr); },
+                L"Choose a folder outside AppData, such as " + In(L"WSL").wstring());
+    EXPECT_FALSE(fs::exists(In(L"AppData")));
+    EXPECT_FALSE(Called(L"--install") || Called(L"--import") || Called(L"--move"));
+}
+
+TEST_F(PackagedTest, RefusesBackupsInsideAppData) {
+    AddDistro({.name = L"Dev"});
+    ExpectError([&] { Backup(L"Dev", In(L"AppData\\Local\\dev.tar").wstring(), BackupFormat::Tar, nullptr); },
+                L"inside AppData");
+    EXPECT_FALSE(Called(L"--export"));
+}
+
+TEST_F(PackagedTest, AllowsFoldersOutsideAppData) {
+    InstallClean({L"Ubuntu", L"A", In(L"WSL\\A").wstring()}, nullptr);
+    InstallClean({L"Ubuntu", L"B", In(L"AppDataBackup\\B").wstring()}, nullptr);  // only a similar name
+    InstallClean({L"Ubuntu", L"C", Path(L"C").wstring()}, nullptr);  // shorter than the AppData path
+    InstallClean({L"Ubuntu", L"D", Path(L"somewhere-else-entirely\\D").wstring()}, nullptr);
+    EXPECT_TRUE(FindDistro(L"A"));
+    EXPECT_TRUE(FindDistro(L"B"));
+    EXPECT_TRUE(FindDistro(L"C"));
+    EXPECT_TRUE(FindDistro(L"D"));
+}
+
+TEST_F(PackagedTest, OutsideTheStoreOrWithoutAProfileAppDataIsAllowed) {
+    CurrentEnvironment().packaged = 0;
+    InstallClean({L"Ubuntu", L"A", In(L"AppData\\Local\\A").wstring()}, nullptr);
+    EXPECT_TRUE(FindDistro(L"A"));
+
+    CurrentEnvironment().packaged = 1;
+    SetEnvironmentVariableW(L"USERPROFILE", nullptr);
+    InstallClean({L"Ubuntu", L"B", In(L"AppData\\Local\\B").wstring()}, nullptr);
+    EXPECT_TRUE(FindDistro(L"B"));
+
+    SetEnvironmentVariableW(L"USERPROFILE", (L"C:\\" + std::wstring(300, L'p')).c_str());  // too long to use
+    InstallClean({L"Ubuntu", L"C", In(L"AppData\\Local\\C").wstring()}, nullptr);
+    EXPECT_TRUE(FindDistro(L"C"));
+}
+
+TEST_F(PackagedTest, TestsRunUnpackagedWhenNotForced) {
+    CurrentEnvironment().packaged = -1;  // detect: the test process has no package identity
+    InstallClean({L"Ubuntu", L"A", In(L"AppData\\Local\\A").wstring()}, nullptr);
+    EXPECT_TRUE(FindDistro(L"A"));
+}

@@ -686,7 +686,9 @@ void OnCommand(UINT id) {
             ui::ShowMessage(g.window,
                         (L"Instance Manager for WSL 1.0\n\nCreate, back up, copy, move and remove WSL instances.\n\n"
                          L"Default storage folder:\n" + GetDefaultRoot() +
-                         L"\n\nCopyright (C) 2026 Greg Silber\n"
+                         L"\n\nChanges you make here are made to WSL itself: instances you create, copy, "
+                         L"move or rename, and default users you set, stay that way if you uninstall this app.\n\n"
+                         L"Copyright (C) 2026 Greg Silber\n"
                          L"This program is free software, licensed under the GNU General Public License "
                          L"version 3 or later. It comes with ABSOLUTELY NO WARRANTY; see the LICENSE file "
                          L"or https://www.gnu.org/licenses/gpl-3.0.html for details.")
